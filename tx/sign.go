@@ -194,6 +194,119 @@ func BuildUnsignedCreateRootTx(params *CreateRootParams) (*MetanetTx, error) {
 	return mtx, nil
 }
 
+// BuildUnsignedCreateChildTx constructs a real go-sdk Transaction for a CreateChild
+// and stores the unsigned bytes in the returned MetanetTx.RawTx.
+//
+// This extends BuildCreateChild by producing actual serialized transaction bytes
+// that can be passed to SignMetanetTx for signing.
+//
+// Inputs:
+//
+//	0: P_parent UTXO (Metanet edge — spends parent's node output)
+//	1: Fee UTXO
+//
+// Outputs:
+//
+//	0: OP_FALSE OP_RETURN <MetaFlag> <P_child> <TxID_parent> <Payload>
+//	1: P2PKH -> P_child (dust)
+//	2: P2PKH -> P_parent (dust, UTXO refresh)
+//	3: P2PKH -> Change (if above dust)
+func BuildUnsignedCreateChildTx(params *CreateChildParams) (*MetanetTx, error) {
+	// First, use the existing BuildCreateChild for validation and fee calculation.
+	mtx, err := BuildCreateChild(params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Now build the real go-sdk Transaction.
+	sdkTx := transaction.NewTransaction()
+
+	// Input 0: P_parent UTXO (Metanet edge).
+	parentUTXOHash, err := chainhash.NewHash(params.ParentUTXO.TxID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid parent UTXO TxID: %v", ErrSigningFailed, err)
+	}
+	sdkTx.AddInput(&transaction.TransactionInput{
+		SourceTXID:       parentUTXOHash,
+		SourceTxOutIndex: params.ParentUTXO.Vout,
+		SequenceNumber:   transaction.DefaultSequenceNumber,
+	})
+
+	// Input 1: Fee UTXO.
+	feeUTXOHash, err := chainhash.NewHash(params.FeeUTXO.TxID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %v", ErrSigningFailed, err)
+	}
+	sdkTx.AddInput(&transaction.TransactionInput{
+		SourceTXID:       feeUTXOHash,
+		SourceTxOutIndex: params.FeeUTXO.Vout,
+		SequenceNumber:   transaction.DefaultSequenceNumber,
+	})
+
+	// Output 0: OP_FALSE OP_RETURN <MetaFlag> <P_child> <TxID_parent> <Payload>
+	opReturnData, err := BuildOPReturnData(params.NodePubKey, params.ParentTxID, params.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("tx: failed to build OP_RETURN: %w", err)
+	}
+	opReturnScript, err := buildOPReturnScript(opReturnData)
+	if err != nil {
+		return nil, err
+	}
+	sdkTx.Outputs = append(sdkTx.Outputs, &transaction.TransactionOutput{
+		Satoshis:      0,
+		LockingScript: opReturnScript,
+	})
+
+	// Output 1: P2PKH -> P_child (dust)
+	childLockScript, err := BuildP2PKHScript(params.NodePubKey)
+	if err != nil {
+		return nil, err
+	}
+	childScript := script.NewFromBytes(childLockScript)
+	sdkTx.Outputs = append(sdkTx.Outputs, &transaction.TransactionOutput{
+		Satoshis:      DustLimit,
+		LockingScript: childScript,
+	})
+
+	// Output 2: P2PKH -> P_parent (dust, UTXO refresh)
+	parentLockScript, err := BuildP2PKHScript(params.ParentPubKey)
+	if err != nil {
+		return nil, err
+	}
+	parentScript := script.NewFromBytes(parentLockScript)
+	sdkTx.Outputs = append(sdkTx.Outputs, &transaction.TransactionOutput{
+		Satoshis:      DustLimit,
+		LockingScript: parentScript,
+	})
+
+	// Output 3: P2PKH -> Change (if above dust)
+	if mtx.ChangeUTXO != nil {
+		var changeLockScript *script.Script
+		if len(params.ChangeAddr) == 20 {
+			addr, err := script.NewAddressFromPublicKeyHash(params.ChangeAddr, true)
+			if err != nil {
+				return nil, fmt.Errorf("%w: change address: %v", ErrScriptBuild, err)
+			}
+			changeLockScript, err = p2pkh.Lock(addr)
+			if err != nil {
+				return nil, fmt.Errorf("%w: change lock script: %v", ErrScriptBuild, err)
+			}
+		} else {
+			// Fall back to P_child as change destination.
+			changeLockScript = childScript
+		}
+		sdkTx.Outputs = append(sdkTx.Outputs, &transaction.TransactionOutput{
+			Satoshis:      mtx.ChangeUTXO.Amount,
+			LockingScript: changeLockScript,
+		})
+	}
+
+	// Store the unsigned raw transaction bytes.
+	mtx.RawTx = sdkTx.Bytes()
+
+	return mtx, nil
+}
+
 // buildOPReturnScript creates an OP_FALSE OP_RETURN script from data pushes.
 func buildOPReturnScript(pushes [][]byte) (*script.Script, error) {
 	s := &script.Script{}
