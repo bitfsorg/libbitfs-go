@@ -1,0 +1,240 @@
+package method42
+
+import (
+	"bytes"
+	"crypto/rand"
+	"testing"
+
+	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func genKP(t *testing.T) (*ec.PrivateKey, *ec.PublicKey) {
+	t.Helper()
+	priv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+	return priv, priv.PubKey()
+}
+
+// ---------------------------------------------------------------------------
+// aesGCMEncrypt / aesGCMDecrypt — error branches
+// ---------------------------------------------------------------------------
+
+func TestAesGCMEncrypt_InvalidKeyLength(t *testing.T) {
+	_, err := aesGCMEncrypt([]byte("hello"), make([]byte, 15))
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrDecryptionFailed)
+}
+
+func TestAesGCMDecrypt_InvalidKeyLength(t *testing.T) {
+	ct := make([]byte, MinCiphertextLen+1)
+	_, err := aesGCMDecrypt(ct, make([]byte, 15))
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrDecryptionFailed)
+}
+
+func TestAesGCMEncrypt_EmptyPlaintext(t *testing.T) {
+	key := make([]byte, 32)
+	rand.Read(key)
+	ct, err := aesGCMEncrypt([]byte{}, key)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(ct), MinCiphertextLen)
+
+	pt, err := aesGCMDecrypt(ct, key)
+	require.NoError(t, err)
+	assert.Empty(t, pt)
+}
+
+func TestAesGCMDecrypt_ExactMinLength(t *testing.T) {
+	ct := make([]byte, MinCiphertextLen)
+	key := make([]byte, 32)
+	_, err := aesGCMDecrypt(ct, key)
+	assert.Error(t, err)
+}
+
+func TestAesGCMDecrypt_NonceSizeEdge(t *testing.T) {
+	key := make([]byte, 32)
+	ct := make([]byte, MinCiphertextLen+1)
+	_, err := aesGCMDecrypt(ct, key)
+	assert.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Encrypt — error propagation branches
+// ---------------------------------------------------------------------------
+
+func TestEncrypt_NilPublicKey_AllModes(t *testing.T) {
+	priv, _ := genKP(t)
+	modes := []Access{AccessFree, AccessPrivate, AccessPaid}
+	for _, mode := range modes {
+		_, err := Encrypt([]byte("data"), priv, nil, mode)
+		assert.ErrorIs(t, err, ErrNilPublicKey, "mode=%v", mode)
+	}
+}
+
+func TestEncrypt_NilPrivateKey_RequiredModes(t *testing.T) {
+	_, pub := genKP(t)
+	for _, mode := range []Access{AccessPrivate, AccessPaid} {
+		_, err := Encrypt([]byte("data"), nil, pub, mode)
+		assert.ErrorIs(t, err, ErrNilPrivateKey, "mode=%v", mode)
+	}
+}
+
+func TestEncrypt_FreeMode_NilPrivateKeyOK(t *testing.T) {
+	_, pub := genKP(t)
+	result, err := Encrypt([]byte("free content"), nil, pub, AccessFree)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Ciphertext)
+	assert.Len(t, result.KeyHash, 32)
+	assert.Len(t, result.AESKey, 32)
+}
+
+// ---------------------------------------------------------------------------
+// Decrypt — error propagation branches
+// ---------------------------------------------------------------------------
+
+func TestDecrypt_BadKeyHashLen(t *testing.T) {
+	priv, pub := genKP(t)
+	_, err := Decrypt(make([]byte, 64), priv, pub, make([]byte, 16), AccessFree)
+	assert.ErrorIs(t, err, ErrKeyHashMismatch)
+}
+
+func TestDecrypt_NilPublicKey_AllModes(t *testing.T) {
+	priv, _ := genKP(t)
+	kh := make([]byte, 32)
+	for _, mode := range []Access{AccessFree, AccessPrivate, AccessPaid} {
+		_, err := Decrypt(make([]byte, 64), priv, nil, kh, mode)
+		assert.ErrorIs(t, err, ErrNilPublicKey, "mode=%v", mode)
+	}
+}
+
+func TestDecrypt_BadAccessMode(t *testing.T) {
+	priv, pub := genKP(t)
+	kh := make([]byte, 32)
+	_, err := Decrypt(make([]byte, 64), priv, pub, kh, Access(99))
+	assert.ErrorIs(t, err, ErrInvalidAccess)
+}
+
+func TestDecrypt_TooShortCiphertext(t *testing.T) {
+	priv, pub := genKP(t)
+	kh := ComputeKeyHash([]byte("x"))
+	_, err := Decrypt(make([]byte, 5), priv, pub, kh, AccessFree)
+	assert.ErrorIs(t, err, ErrInvalidCiphertext)
+}
+
+func TestDecrypt_TamperedCiphertextAllModes(t *testing.T) {
+	priv, pub := genKP(t)
+	plaintext := []byte("secret data for all modes")
+
+	for _, mode := range []Access{AccessFree, AccessPrivate, AccessPaid} {
+		result, err := Encrypt(plaintext, priv, pub, mode)
+		require.NoError(t, err)
+
+		tampered := make([]byte, len(result.Ciphertext))
+		copy(tampered, result.Ciphertext)
+		tampered[len(tampered)-1] ^= 0xff
+
+		_, err = Decrypt(tampered, priv, pub, result.KeyHash, mode)
+		assert.Error(t, err, "mode=%v", mode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DecryptWithCapsule — error branches
+// ---------------------------------------------------------------------------
+
+func TestDecryptWithCapsule_BadKeyHashLen(t *testing.T) {
+	_, err := DecryptWithCapsule(make([]byte, 64), []byte("capsule"), make([]byte, 16))
+	assert.ErrorIs(t, err, ErrKeyHashMismatch)
+}
+
+func TestDecryptWithCapsule_TooShortCiphertext(t *testing.T) {
+	_, err := DecryptWithCapsule(make([]byte, 5), make([]byte, 32), make([]byte, 32))
+	assert.ErrorIs(t, err, ErrInvalidCiphertext)
+}
+
+func TestDecryptWithCapsule_WrongCapsuleDecryptFails(t *testing.T) {
+	priv, pub := genKP(t)
+	result, err := Encrypt([]byte("paid content"), priv, pub, AccessPaid)
+	require.NoError(t, err)
+
+	buyer, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+	capsule, err := ComputeCapsule(priv, buyer.PubKey())
+	require.NoError(t, err)
+
+	wrongCapsule := make([]byte, len(capsule))
+	_, err = DecryptWithCapsule(result.Ciphertext, wrongCapsule, result.KeyHash)
+	assert.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// ECDH — x-coordinate padding
+// ---------------------------------------------------------------------------
+
+func TestECDH_OutputAlways32Bytes(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		priv, pub := genKP(t)
+		shared, err := ECDH(priv, pub)
+		require.NoError(t, err)
+		assert.Len(t, shared, 32, "iteration %d", i)
+	}
+}
+
+func TestECDH_SymmetryMultiplePairs(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		priv1, pub1 := genKP(t)
+		priv2, pub2 := genKP(t)
+
+		s1, err := ECDH(priv1, pub2)
+		require.NoError(t, err)
+		s2, err := ECDH(priv2, pub1)
+		require.NoError(t, err)
+		assert.True(t, bytes.Equal(s1, s2), "iteration %d", i)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DeriveAESKey — edge cases
+// ---------------------------------------------------------------------------
+
+func TestDeriveAESKey_ZeroKeyHash(t *testing.T) {
+	shared := make([]byte, 32)
+	rand.Read(shared)
+	kh := make([]byte, 32)
+
+	key, err := DeriveAESKey(shared, kh)
+	require.NoError(t, err)
+	assert.Len(t, key, AESKeyLen)
+}
+
+func TestDeriveAESKey_MaxLengthSharedSecret(t *testing.T) {
+	shared := make([]byte, 128)
+	rand.Read(shared)
+	kh := make([]byte, 32)
+	rand.Read(kh)
+
+	key, err := DeriveAESKey(shared, kh)
+	require.NoError(t, err)
+	assert.Len(t, key, AESKeyLen)
+}
+
+// ---------------------------------------------------------------------------
+// Full roundtrip — all three modes
+// ---------------------------------------------------------------------------
+
+func TestFullRoundTrip_AllModes(t *testing.T) {
+	priv, pub := genKP(t)
+	plaintext := []byte("test all access modes roundtrip")
+
+	for _, mode := range []Access{AccessFree, AccessPrivate, AccessPaid} {
+		enc, err := Encrypt(plaintext, priv, pub, mode)
+		require.NoError(t, err, "Encrypt mode=%v", mode)
+
+		dec, err := Decrypt(enc.Ciphertext, priv, pub, enc.KeyHash, mode)
+		require.NoError(t, err, "Decrypt mode=%v", mode)
+		assert.Equal(t, plaintext, dec.Plaintext, "mode=%v", mode)
+		assert.Equal(t, enc.KeyHash, dec.KeyHash, "mode=%v keyHash mismatch", mode)
+	}
+}
