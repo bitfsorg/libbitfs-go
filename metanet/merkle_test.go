@@ -304,3 +304,102 @@ func TestVerifyChildMembership_WrongMerkleRoot(t *testing.T) {
 	ok = VerifyChildMembership(&children[0], proof, 0, nil)
 	assert.False(t, ok, "nil merkle root must fail")
 }
+
+func TestSerializePayload_MerkleRoot(t *testing.T) {
+	node := &Node{
+		Type: NodeTypeDir,
+		Children: []ChildEntry{
+			{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+			{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+		},
+		MerkleRoot: ComputeDirectoryMerkleRoot([]ChildEntry{
+			{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+			{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+		}),
+	}
+
+	payload, err := SerializePayload(node)
+	require.NoError(t, err)
+
+	// Tag 0x1A should be present in the serialized output
+	found := false
+	offset := 0
+	for offset < len(payload) {
+		if offset+3 > len(payload) {
+			break
+		}
+		tag := payload[offset]
+		length := int(payload[offset+1]) | int(payload[offset+2])<<8
+		offset += 3
+		if tag == 0x1A {
+			found = true
+			assert.Equal(t, 32, length, "MerkleRoot TLV length must be 32")
+			assert.Equal(t, node.MerkleRoot, payload[offset:offset+length])
+		}
+		offset += length
+	}
+	assert.True(t, found, "tag 0x1A must be present in serialized payload")
+}
+
+func TestSerializePayload_MerkleRoot_NilSkipped(t *testing.T) {
+	node := &Node{
+		Type: NodeTypeDir,
+		// No children, MerkleRoot is nil
+	}
+
+	payload, err := SerializePayload(node)
+	require.NoError(t, err)
+
+	// Tag 0x1A should NOT be present
+	offset := 0
+	for offset < len(payload) {
+		if offset+3 > len(payload) {
+			break
+		}
+		tag := payload[offset]
+		length := int(payload[offset+1]) | int(payload[offset+2])<<8
+		offset += 3
+		assert.NotEqual(t, byte(0x1A), tag, "tag 0x1A must not appear when MerkleRoot is nil")
+		offset += length
+	}
+}
+
+func TestSerializeDeserialize_MerkleRoot_RoundTrip(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+		{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+		{Index: 2, Name: "c/", Type: NodeTypeDir, PubKey: makePubKey(0x03)},
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	original := &Node{
+		Type:       NodeTypeDir,
+		Children:   children,
+		MerkleRoot: merkleRoot,
+	}
+
+	payload, err := SerializePayload(original)
+	require.NoError(t, err)
+
+	parsed := &Node{Metadata: make(map[string]string)}
+	err = deserializePayload(payload, parsed)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.MerkleRoot, parsed.MerkleRoot, "MerkleRoot must survive round-trip")
+	assert.Len(t, parsed.MerkleRoot, 32)
+}
+
+func TestDeserializePayload_NoMerkleRoot_BackwardCompat(t *testing.T) {
+	// Simulate old node without tag 0x1A: just version + type
+	node := &Node{
+		Type: NodeTypeDir,
+	}
+	payload, err := SerializePayload(node)
+	require.NoError(t, err)
+
+	parsed := &Node{Metadata: make(map[string]string)}
+	err = deserializePayload(payload, parsed)
+	require.NoError(t, err)
+
+	assert.Nil(t, parsed.MerkleRoot, "old nodes without tag 0x1A must have nil MerkleRoot")
+}

@@ -35,6 +35,7 @@ const (
 	tagCltvHeight     = 0x17
 	tagRevenueShare   = 0x18
 	tagNetworkName    = 0x19
+	tagMerkleRoot     = 0x1A // 32 bytes, directory Merkle root of children
 )
 
 // ParseNode parses OP_RETURN push data (as produced by tx.ParseOPReturnData)
@@ -43,7 +44,7 @@ const (
 func ParseNode(pushes [][]byte) (*Node, error) {
 	pNode, parentTxID, payload, err := tx.ParseOPReturnData(pushes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidOPReturn, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidOPReturn, err)
 	}
 
 	node := &Node{
@@ -55,7 +56,7 @@ func ParseNode(pushes [][]byte) (*Node, error) {
 	copy(node.ParentTxID, parentTxID)
 
 	if err := deserializePayload(payload, node); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPayload, err)
 	}
 
 	return node, nil
@@ -199,22 +200,25 @@ func SerializePayload(node *Node) ([]byte, error) {
 		buf = appendStringField(buf, tagNetworkName, node.NetworkName)
 	}
 
+	// MerkleRoot (directory only, present only when non-nil)
+	if len(node.MerkleRoot) > 0 {
+		buf = appendBytesField(buf, tagMerkleRoot, node.MerkleRoot)
+	}
+
 	return buf, nil
 }
 
 // --- TLV serialization helpers ---
 
 func appendUint32Field(buf []byte, tag byte, val uint32) []byte {
-	buf = append(buf, tag)
-	buf = append(buf, 4, 0) // length = 4, little-endian uint16
+	buf = append(buf, tag, 4, 0) // tag + length = 4, little-endian uint16
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, val)
 	return append(buf, b...)
 }
 
 func appendUint64Field(buf []byte, tag byte, val uint64) []byte {
-	buf = append(buf, tag)
-	buf = append(buf, 8, 0) // length = 8
+	buf = append(buf, tag, 8, 0) // tag byte, then length 8 as LE uint16
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, val)
 	return append(buf, b...)
@@ -377,6 +381,9 @@ func deserializePayload(data []byte, node *Node) error {
 			}
 		case tagNetworkName:
 			node.NetworkName = string(value)
+		case tagMerkleRoot:
+			node.MerkleRoot = make([]byte, length)
+			copy(node.MerkleRoot, value)
 		default:
 			// Skip unknown tags for forward compatibility
 		}
