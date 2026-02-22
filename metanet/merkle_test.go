@@ -1,6 +1,7 @@
 package metanet
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -152,4 +153,154 @@ func TestComputeDirectoryMerkleRoot_CrossVerifyWithSPV(t *testing.T) {
 
 	dirRoot := ComputeDirectoryMerkleRoot(children)
 	assert.Equal(t, spvRoot, dirRoot, "directory Merkle root must match spv.BuildMerkleTree")
+}
+
+func TestBuildDirectoryMerkleProof_InvalidIndex(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+	}
+
+	_, err := BuildDirectoryMerkleProof(children, -1)
+	assert.Error(t, err)
+
+	_, err = BuildDirectoryMerkleProof(children, 1)
+	assert.Error(t, err)
+
+	_, err = BuildDirectoryMerkleProof(nil, 0)
+	assert.Error(t, err)
+}
+
+func TestBuildDirectoryMerkleProof_SingleChild(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "only.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+	}
+
+	proof, err := BuildDirectoryMerkleProof(children, 0)
+	require.NoError(t, err)
+	assert.Empty(t, proof, "single child: proof is empty (leaf IS the root)")
+}
+
+func TestBuildAndVerify_TwoChildren(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+		{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	for idx := 0; idx < 2; idx++ {
+		proof, err := BuildDirectoryMerkleProof(children, idx)
+		require.NoError(t, err)
+		assert.Len(t, proof, 1, "two children: proof has 1 sibling")
+
+		ok := VerifyChildMembership(&children[idx], proof, idx, merkleRoot)
+		assert.True(t, ok, "valid proof for child %d", idx)
+	}
+}
+
+func TestBuildAndVerify_FourChildren(t *testing.T) {
+	children := make([]ChildEntry, 4)
+	for i := range children {
+		children[i] = ChildEntry{
+			Index:  uint32(i),
+			Name:   fmt.Sprintf("file%d.txt", i),
+			Type:   NodeTypeFile,
+			PubKey: makePubKey(byte(i + 1)),
+		}
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	for idx := 0; idx < 4; idx++ {
+		proof, err := BuildDirectoryMerkleProof(children, idx)
+		require.NoError(t, err)
+		assert.Len(t, proof, 2, "4 children: proof depth is 2")
+
+		ok := VerifyChildMembership(&children[idx], proof, idx, merkleRoot)
+		assert.True(t, ok, "valid proof for child %d", idx)
+	}
+}
+
+func TestBuildAndVerify_FiveChildren_OddPadding(t *testing.T) {
+	children := make([]ChildEntry, 5)
+	for i := range children {
+		children[i] = ChildEntry{
+			Index:  uint32(i),
+			Name:   fmt.Sprintf("f%d", i),
+			Type:   NodeTypeFile,
+			PubKey: makePubKey(byte(i + 1)),
+		}
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	for idx := 0; idx < 5; idx++ {
+		proof, err := BuildDirectoryMerkleProof(children, idx)
+		require.NoError(t, err)
+
+		ok := VerifyChildMembership(&children[idx], proof, idx, merkleRoot)
+		assert.True(t, ok, "valid proof for child %d", idx)
+	}
+}
+
+func TestVerifyChildMembership_TamperedEntry(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+		{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	proof, err := BuildDirectoryMerkleProof(children, 0)
+	require.NoError(t, err)
+
+	tampered := children[0]
+	tampered.Name = "evil.txt"
+	ok := VerifyChildMembership(&tampered, proof, 0, merkleRoot)
+	assert.False(t, ok, "tampered entry must fail verification")
+}
+
+func TestVerifyChildMembership_WrongProof(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+		{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+		{Index: 2, Name: "c.txt", Type: NodeTypeFile, PubKey: makePubKey(0x03)},
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	proof0, err := BuildDirectoryMerkleProof(children, 0)
+	require.NoError(t, err)
+
+	ok := VerifyChildMembership(&children[1], proof0, 0, merkleRoot)
+	assert.False(t, ok, "wrong proof must fail")
+}
+
+func TestVerifyChildMembership_WrongIndex(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+		{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+
+	proof, err := BuildDirectoryMerkleProof(children, 0)
+	require.NoError(t, err)
+
+	ok := VerifyChildMembership(&children[0], proof, 1, merkleRoot)
+	assert.False(t, ok, "wrong index must fail")
+}
+
+func TestVerifyChildMembership_WrongMerkleRoot(t *testing.T) {
+	children := []ChildEntry{
+		{Index: 0, Name: "a.txt", Type: NodeTypeFile, PubKey: makePubKey(0x01)},
+		{Index: 1, Name: "b.txt", Type: NodeTypeFile, PubKey: makePubKey(0x02)},
+	}
+	merkleRoot := ComputeDirectoryMerkleRoot(children)
+	_ = merkleRoot // ensure setup is valid; tests below use fakeRoot and nil
+
+	proof, err := BuildDirectoryMerkleProof(children, 0)
+	require.NoError(t, err)
+
+	fakeRoot := make([]byte, 32)
+	fakeRoot[0] = 0xFF
+	ok := VerifyChildMembership(&children[0], proof, 0, fakeRoot)
+	assert.False(t, ok, "wrong merkle root must fail")
+
+	ok = VerifyChildMembership(&children[0], proof, 0, nil)
+	assert.False(t, ok, "nil merkle root must fail")
 }
