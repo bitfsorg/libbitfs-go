@@ -78,6 +78,7 @@ func AddChild(dirNode *Node, name string, nodeType NodeType, pubKey []byte, hard
 
 	dirNode.Children = append(dirNode.Children, entry)
 	dirNode.NextChildIndex++
+	recomputeMerkleRoot(dirNode)
 
 	return &dirNode.Children[len(dirNode.Children)-1], nil
 }
@@ -95,6 +96,7 @@ func RemoveChild(dirNode *Node, name string) error {
 	for i, child := range dirNode.Children {
 		if child.Name == name {
 			dirNode.Children = append(dirNode.Children[:i], dirNode.Children[i+1:]...)
+			recomputeMerkleRoot(dirNode)
 			return nil
 		}
 	}
@@ -125,6 +127,7 @@ func RenameChild(dirNode *Node, oldName, newName string) error {
 	for i := range dirNode.Children {
 		if dirNode.Children[i].Name == oldName {
 			dirNode.Children[i].Name = newName
+			recomputeMerkleRoot(dirNode)
 			return nil
 		}
 	}
@@ -142,6 +145,11 @@ func NextChildIndex(dirNode *Node) (uint32, error) {
 		return 0, fmt.Errorf("%w: node type is %s", ErrNotDirectory, dirNode.Type)
 	}
 	return dirNode.NextChildIndex, nil
+}
+
+// recomputeMerkleRoot updates the node's MerkleRoot from its current Children.
+func recomputeMerkleRoot(node *Node) {
+	node.MerkleRoot = ComputeDirectoryMerkleRoot(node.Children)
 }
 
 // validateChildName checks that a name is valid for a directory entry.

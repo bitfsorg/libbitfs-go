@@ -403,3 +403,84 @@ func TestDeserializePayload_NoMerkleRoot_BackwardCompat(t *testing.T) {
 
 	assert.Nil(t, parsed.MerkleRoot, "old nodes without tag 0x1A must have nil MerkleRoot")
 }
+
+func TestAddChild_UpdatesMerkleRoot(t *testing.T) {
+	dir := &Node{
+		Type:     NodeTypeDir,
+		PNode:    makePubKey(0xAA),
+		Children: nil,
+	}
+
+	// Initially nil
+	assert.Nil(t, dir.MerkleRoot)
+
+	// Add first child
+	_, err := AddChild(dir, "a.txt", NodeTypeFile, makePubKey(0x01), false)
+	require.NoError(t, err)
+	require.Len(t, dir.MerkleRoot, 32, "MerkleRoot must be set after AddChild")
+
+	// Must match manual computation
+	expected := ComputeDirectoryMerkleRoot(dir.Children)
+	assert.Equal(t, expected, dir.MerkleRoot)
+
+	// Add second child — root changes
+	oldRoot := make([]byte, 32)
+	copy(oldRoot, dir.MerkleRoot)
+
+	_, err = AddChild(dir, "b.txt", NodeTypeFile, makePubKey(0x02), false)
+	require.NoError(t, err)
+	assert.NotEqual(t, oldRoot, dir.MerkleRoot, "MerkleRoot must change when children change")
+
+	expected = ComputeDirectoryMerkleRoot(dir.Children)
+	assert.Equal(t, expected, dir.MerkleRoot)
+}
+
+func TestRemoveChild_UpdatesMerkleRoot(t *testing.T) {
+	dir := &Node{
+		Type:  NodeTypeDir,
+		PNode: makePubKey(0xAA),
+	}
+
+	_, err := AddChild(dir, "a.txt", NodeTypeFile, makePubKey(0x01), false)
+	require.NoError(t, err)
+	_, err = AddChild(dir, "b.txt", NodeTypeFile, makePubKey(0x02), false)
+	require.NoError(t, err)
+
+	rootBefore := make([]byte, 32)
+	copy(rootBefore, dir.MerkleRoot)
+
+	// Remove one child
+	err = RemoveChild(dir, "a.txt")
+	require.NoError(t, err)
+	assert.NotEqual(t, rootBefore, dir.MerkleRoot, "MerkleRoot must change after removal")
+
+	expected := ComputeDirectoryMerkleRoot(dir.Children)
+	assert.Equal(t, expected, dir.MerkleRoot)
+
+	// Remove last child — MerkleRoot becomes nil
+	err = RemoveChild(dir, "b.txt")
+	require.NoError(t, err)
+	assert.Nil(t, dir.MerkleRoot, "empty dir has nil MerkleRoot")
+}
+
+func TestRenameChild_UpdatesMerkleRoot(t *testing.T) {
+	dir := &Node{
+		Type:  NodeTypeDir,
+		PNode: makePubKey(0xAA),
+	}
+
+	_, err := AddChild(dir, "old.txt", NodeTypeFile, makePubKey(0x01), false)
+	require.NoError(t, err)
+	_, err = AddChild(dir, "other.txt", NodeTypeFile, makePubKey(0x02), false)
+	require.NoError(t, err)
+
+	rootBefore := make([]byte, 32)
+	copy(rootBefore, dir.MerkleRoot)
+
+	err = RenameChild(dir, "old.txt", "new.txt")
+	require.NoError(t, err)
+	assert.NotEqual(t, rootBefore, dir.MerkleRoot, "MerkleRoot must change after rename")
+
+	expected := ComputeDirectoryMerkleRoot(dir.Children)
+	assert.Equal(t, expected, dir.MerkleRoot)
+}
