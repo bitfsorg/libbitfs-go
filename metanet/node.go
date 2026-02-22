@@ -110,12 +110,13 @@ type Node struct {
 	KeyHash        []byte // SHA256(SHA256(plaintext))
 	Access         AccessLevel
 	PricePerKB     uint64
-	LinkTarget     []byte   // Target P_node for soft links
+	LinkTarget     []byte // Target P_node for soft links
 	LinkType       LinkType
 	Timestamp      uint64
 	Parent         []byte // Parent P_node
 	Index          uint32 // File index within parent
 	Children       []ChildEntry
+	MerkleRoot     []byte // Merkle root of Children (32 bytes, nil for non-dir or empty dir)
 	NextChildIndex uint32
 	Domain         string
 	Keywords       string
