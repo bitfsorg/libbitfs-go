@@ -484,3 +484,66 @@ func TestRenameChild_UpdatesMerkleRoot(t *testing.T) {
 	expected := ComputeDirectoryMerkleRoot(dir.Children)
 	assert.Equal(t, expected, dir.MerkleRoot)
 }
+
+func TestMerkleRoot_EndToEnd(t *testing.T) {
+	// Simulate a realistic directory lifecycle:
+	// 1. Create dir, add children
+	// 2. Verify MerkleRoot is set and correct
+	// 3. Build proof for each child and verify membership
+	// 4. Serialize and deserialize — MerkleRoot preserved
+	// 5. Remove a child — MerkleRoot updates, old proof fails
+
+	dir := &Node{
+		Type:  NodeTypeDir,
+		PNode: makePubKey(0xDD),
+	}
+
+	// Add 3 children
+	_, err := AddChild(dir, "readme.md", NodeTypeFile, makePubKey(0x01), false)
+	require.NoError(t, err)
+	_, err = AddChild(dir, "src", NodeTypeDir, makePubKey(0x02), false)
+	require.NoError(t, err)
+	_, err = AddChild(dir, "go.mod", NodeTypeFile, makePubKey(0x03), false)
+	require.NoError(t, err)
+
+	require.Len(t, dir.MerkleRoot, 32)
+	assert.Equal(t, ComputeDirectoryMerkleRoot(dir.Children), dir.MerkleRoot)
+
+	// Build and verify proofs for each child
+	for idx, child := range dir.Children {
+		proof, err := BuildDirectoryMerkleProof(dir.Children, idx)
+		require.NoError(t, err)
+
+		ok := VerifyChildMembership(&child, proof, idx, dir.MerkleRoot)
+		assert.True(t, ok, "proof for %q at index %d", child.Name, idx)
+	}
+
+	// Serialize round-trip
+	payload, err := SerializePayload(dir)
+	require.NoError(t, err)
+
+	parsed := &Node{Metadata: make(map[string]string)}
+	err = deserializePayload(payload, parsed)
+	require.NoError(t, err)
+	assert.Equal(t, dir.MerkleRoot, parsed.MerkleRoot)
+
+	// Save proof for child 0 before removal
+	proof0, err := BuildDirectoryMerkleProof(dir.Children, 0)
+	require.NoError(t, err)
+	child0 := dir.Children[0]
+	oldRoot := make([]byte, 32)
+	copy(oldRoot, dir.MerkleRoot)
+
+	// Remove child 1 ("src") — MerkleRoot changes
+	err = RemoveChild(dir, "src")
+	require.NoError(t, err)
+	assert.NotEqual(t, oldRoot, dir.MerkleRoot, "root must change after removal")
+
+	// Old proof for child 0 against the OLD root still works
+	ok := VerifyChildMembership(&child0, proof0, 0, oldRoot)
+	assert.True(t, ok, "old proof against old root still valid")
+
+	// Old proof for child 0 against the NEW root does NOT work
+	ok = VerifyChildMembership(&child0, proof0, 0, dir.MerkleRoot)
+	assert.False(t, ok, "old proof against new root must fail")
+}
