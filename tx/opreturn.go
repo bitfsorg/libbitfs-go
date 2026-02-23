@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-sdk/script"
 )
 
 // Metanet protocol constants.
@@ -57,10 +58,10 @@ func BuildOPReturnData(pNode *ec.PublicKey, parentTxID []byte, payload []byte) (
 	}
 
 	pushes := [][]byte{
-		MetaFlagBytes,  // pushdata[0]: "meta"
-		pNodeBytes,     // pushdata[1]: P_node
-		parentTxID,     // pushdata[2]: TxID_parent (empty for root)
-		payload,        // pushdata[3]: Protobuf payload
+		MetaFlagBytes, // pushdata[0]: "meta"
+		pNodeBytes,    // pushdata[1]: P_node
+		parentTxID,    // pushdata[2]: TxID_parent (empty for root)
+		payload,       // pushdata[3]: Protobuf payload
 	}
 
 	return pushes, nil
@@ -97,6 +98,104 @@ func ParseOPReturnData(pushes [][]byte) (pNode []byte, parentTxID []byte, payloa
 	}
 
 	return pNode, parentTxID, payload, nil
+}
+
+// TxOutput is a minimal representation of a transaction output for parsing.
+type TxOutput struct {
+	Value        uint64
+	ScriptPubKey []byte
+}
+
+// ParsedNodeOp represents one parsed Metanet node operation from a TX.
+type ParsedNodeOp struct {
+	PNode      []byte // Compressed public key (33 bytes)
+	ParentTxID []byte // 0 or 32 bytes
+	Payload    []byte
+	Vout       uint32 // Output index of the OP_RETURN
+	NodeVout   uint32 // Output index of the following P2PKH
+}
+
+// ParseTxNodeOps scans all outputs of a transaction and extracts Metanet
+// node operations. Each OP_RETURN with MetaFlag is paired with the following
+// P2PKH output.
+//
+// This supports the multi-OP_RETURN format used by MutationBatch where a
+// single TX contains multiple node operations.
+func ParseTxNodeOps(outputs []TxOutput) ([]ParsedNodeOp, error) {
+	var ops []ParsedNodeOp
+
+	for i := 0; i < len(outputs); i++ {
+		out := outputs[i]
+
+		// Check if this output is an OP_RETURN with Metanet flag.
+		pushes, ok := parseMetanetOPReturn(out.ScriptPubKey)
+		if !ok {
+			continue
+		}
+
+		// Parse the push data.
+		pNode, parentTxID, payload, err := ParseOPReturnData(pushes)
+		if err != nil {
+			// Skip malformed OP_RETURN outputs.
+			continue
+		}
+
+		// The next output should be the P2PKH dust output.
+		if i+1 >= len(outputs) {
+			return nil, fmt.Errorf("%w: OP_RETURN at output %d has no following P2PKH output",
+				ErrInvalidOPReturn, i)
+		}
+
+		nodeVout := uint32(i + 1)
+
+		op := ParsedNodeOp{
+			PNode:      pNode,
+			ParentTxID: parentTxID,
+			Payload:    payload,
+			Vout:       uint32(i),
+			NodeVout:   nodeVout,
+		}
+		ops = append(ops, op)
+
+		// Skip the P2PKH output we just paired.
+		i++
+	}
+
+	return ops, nil
+}
+
+// parseMetanetOPReturn checks if a script is an OP_FALSE OP_RETURN script
+// with Metanet flag and returns the push data elements if so.
+func parseMetanetOPReturn(scriptBytes []byte) ([][]byte, bool) {
+	if len(scriptBytes) < 6 {
+		return nil, false
+	}
+
+	// Check OP_FALSE (0x00) OP_RETURN (0x6a) prefix.
+	if scriptBytes[0] != script.Op0 || scriptBytes[1] != script.OpRETURN {
+		return nil, false
+	}
+
+	// Parse the push data portion after OP_0 OP_RETURN.
+	// The remaining bytes are standard push data opcodes.
+	afterReturn := scriptBytes[2:]
+	pushScript := script.NewFromBytes(afterReturn)
+	chunks, err := pushScript.Chunks()
+	if err != nil || len(chunks) < 4 {
+		return nil, false
+	}
+
+	pushes := make([][]byte, 4)
+	for j := 0; j < 4; j++ {
+		pushes[j] = chunks[j].Data
+	}
+
+	// Verify MetaFlag.
+	if !bytes.Equal(pushes[0], MetaFlagBytes) {
+		return nil, false
+	}
+
+	return pushes, true
 }
 
 // EstimateFee estimates the transaction fee for a given size and fee rate.

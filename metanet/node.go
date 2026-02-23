@@ -21,6 +21,8 @@ const (
 	NodeTypeDir NodeType = 1
 	// NodeTypeLink represents a link node (soft link).
 	NodeTypeLink NodeType = 2
+	// NodeTypeAnchor represents a git commit anchor node.
+	NodeTypeAnchor NodeType = 3
 )
 
 // String returns a human-readable representation of the node type.
@@ -32,6 +34,8 @@ func (nt NodeType) String() string {
 		return "DIR"
 	case NodeTypeLink:
 		return "LINK"
+	case NodeTypeAnchor:
+		return "ANCHOR"
 	default:
 		return "UNKNOWN"
 	}
@@ -132,6 +136,15 @@ type Node struct {
 	CltvHeight     uint32
 	RevenueShare   uint32
 	NetworkName    string
+
+	// Anchor-specific fields (NodeTypeAnchor only)
+	TreeRootPNode    []byte   // Root directory's P_node (33 bytes)
+	TreeRootTxID     []byte   // Root directory's latest TxID (32 bytes)
+	ParentAnchorTxID [][]byte // Parent anchor TxIDs (merge commits have multiple)
+	Author           string   // Git commit author
+	CommitMessage    string   // Git commit message
+	GitCommitSHA     []byte   // Git commit SHA for cross-reference (20 bytes)
+	FileMode         uint32   // Git file mode (100644, 100755, 120000)
 }
 
 // IsRoot returns true if this node has no parent (root of the filesystem).

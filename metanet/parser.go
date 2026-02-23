@@ -36,6 +36,15 @@ const (
 	tagRevenueShare   = 0x18
 	tagNetworkName    = 0x19
 	tagMerkleRoot     = 0x1A // 32 bytes, directory Merkle root of children
+
+	// Anchor node tags (NodeTypeAnchor)
+	tagTreeRootPNode    = 0x20 // 33 bytes, root directory's P_node
+	tagTreeRootTxID     = 0x21 // 32 bytes, root directory's latest TxID
+	tagParentAnchorTxID = 0x22 // 32 bytes each, repeated for merge commits
+	tagAuthor           = 0x23 // string, git commit author
+	tagCommitMessage    = 0x24 // string, git commit message
+	tagGitCommitSHA     = 0x25 // 20 bytes, git commit SHA
+	tagFileMode         = 0x26 // uint32, git file mode
 )
 
 // ParseNode parses OP_RETURN push data (as produced by tx.ParseOPReturnData)
@@ -203,6 +212,29 @@ func SerializePayload(node *Node) ([]byte, error) {
 	// MerkleRoot (directory only, present only when non-nil)
 	if len(node.MerkleRoot) > 0 {
 		buf = appendBytesField(buf, tagMerkleRoot, node.MerkleRoot)
+	}
+
+	// Anchor-specific fields (NodeTypeAnchor only)
+	if len(node.TreeRootPNode) > 0 {
+		buf = appendBytesField(buf, tagTreeRootPNode, node.TreeRootPNode)
+	}
+	if len(node.TreeRootTxID) > 0 {
+		buf = appendBytesField(buf, tagTreeRootTxID, node.TreeRootTxID)
+	}
+	for _, parentAnchor := range node.ParentAnchorTxID {
+		buf = appendBytesField(buf, tagParentAnchorTxID, parentAnchor)
+	}
+	if node.Author != "" {
+		buf = appendStringField(buf, tagAuthor, node.Author)
+	}
+	if node.CommitMessage != "" {
+		buf = appendStringField(buf, tagCommitMessage, node.CommitMessage)
+	}
+	if len(node.GitCommitSHA) > 0 {
+		buf = appendBytesField(buf, tagGitCommitSHA, node.GitCommitSHA)
+	}
+	if node.FileMode > 0 {
+		buf = appendUint32Field(buf, tagFileMode, node.FileMode)
 	}
 
 	return buf, nil
@@ -384,6 +416,30 @@ func deserializePayload(data []byte, node *Node) error {
 		case tagMerkleRoot:
 			node.MerkleRoot = make([]byte, length)
 			copy(node.MerkleRoot, value)
+
+		// Anchor node fields
+		case tagTreeRootPNode:
+			node.TreeRootPNode = make([]byte, length)
+			copy(node.TreeRootPNode, value)
+		case tagTreeRootTxID:
+			node.TreeRootTxID = make([]byte, length)
+			copy(node.TreeRootTxID, value)
+		case tagParentAnchorTxID:
+			parentAnchor := make([]byte, length)
+			copy(parentAnchor, value)
+			node.ParentAnchorTxID = append(node.ParentAnchorTxID, parentAnchor)
+		case tagAuthor:
+			node.Author = string(value)
+		case tagCommitMessage:
+			node.CommitMessage = string(value)
+		case tagGitCommitSHA:
+			node.GitCommitSHA = make([]byte, length)
+			copy(node.GitCommitSHA, value)
+		case tagFileMode:
+			if length == 4 {
+				node.FileMode = binary.LittleEndian.Uint32(value)
+			}
+
 		default:
 			// Skip unknown tags for forward compatibility
 		}
