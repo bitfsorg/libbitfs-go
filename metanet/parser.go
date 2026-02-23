@@ -36,6 +36,7 @@ const (
 	tagRevenueShare   = 0x18
 	tagNetworkName    = 0x19
 	tagMerkleRoot     = 0x1A // 32 bytes, directory Merkle root of children
+	tagEncPayload     = 0x1B // inline encrypted content (small files)
 
 	// Anchor node tags (NodeTypeAnchor)
 	tagTreeRootPNode    = 0x20 // 33 bytes, root directory's P_node
@@ -212,6 +213,11 @@ func SerializePayload(node *Node) ([]byte, error) {
 	// MerkleRoot (directory only, present only when non-nil)
 	if len(node.MerkleRoot) > 0 {
 		buf = appendBytesField(buf, tagMerkleRoot, node.MerkleRoot)
+	}
+
+	// EncPayload (inline encrypted content for small files)
+	if len(node.EncPayload) > 0 {
+		buf = appendBytesField(buf, tagEncPayload, node.EncPayload)
 	}
 
 	// Anchor-specific fields (NodeTypeAnchor only)
@@ -416,6 +422,9 @@ func deserializePayload(data []byte, node *Node) error {
 		case tagMerkleRoot:
 			node.MerkleRoot = make([]byte, length)
 			copy(node.MerkleRoot, value)
+		case tagEncPayload:
+			node.EncPayload = make([]byte, length)
+			copy(node.EncPayload, value)
 
 		// Anchor node fields
 		case tagTreeRootPNode:
