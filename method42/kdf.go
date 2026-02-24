@@ -20,6 +20,9 @@ const (
 	// HKDFInfo is the constant info string used in HKDF-SHA256 key derivation.
 	HKDFInfo = "bitfs-file-encryption"
 
+	// HKDFBuyerMaskInfo is the info string for buyer mask derivation in paid content flow.
+	HKDFBuyerMaskInfo = "bitfs-buyer-mask"
+
 	// AESKeyLen is the length of the derived AES-256 key in bytes.
 	AESKeyLen = 32
 )
@@ -57,7 +60,35 @@ func DeriveAESKey(sharedSecretX []byte, keyHash []byte) ([]byte, error) {
 	hkdfReader := hkdf.New(sha256.New, sharedSecretX, keyHash, []byte(HKDFInfo))
 	key := make([]byte, AESKeyLen)
 	if _, err := io.ReadFull(hkdfReader, key); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHKDFFailure, err)
+		return nil, fmt.Errorf("%w: %w", ErrHKDFFailure, err)
 	}
 	return key, nil
+}
+
+// DeriveBuyerMask derives a 32-byte buyer mask using HKDF-SHA256.
+// Used in the paid content flow: capsule = aes_key XOR buyer_mask.
+//
+// Parameters:
+//   - sharedSecretX: ECDH(D_node, P_buyer).x (or equivalently ECDH(D_buyer, P_node).x)
+//   - keyHash: SHA256(SHA256(plaintext)), 32 bytes
+//
+// The HKDF parameters are:
+//   - IKM  = sharedSecretX
+//   - Salt = keyHash
+//   - Info = "bitfs-buyer-mask"
+//   - Len  = 32 (AES-256)
+func DeriveBuyerMask(sharedSecretX []byte, keyHash []byte) ([]byte, error) {
+	if len(sharedSecretX) == 0 {
+		return nil, fmt.Errorf("%w: shared secret is empty", ErrHKDFFailure)
+	}
+	if len(keyHash) != 32 {
+		return nil, fmt.Errorf("%w: key hash must be 32 bytes, got %d", ErrHKDFFailure, len(keyHash))
+	}
+
+	hkdfReader := hkdf.New(sha256.New, sharedSecretX, keyHash, []byte(HKDFBuyerMaskInfo))
+	mask := make([]byte, AESKeyLen)
+	if _, err := io.ReadFull(hkdfReader, mask); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHKDFFailure, err)
+	}
+	return mask, nil
 }

@@ -144,17 +144,27 @@ func Decrypt(ciphertext []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicK
 	}, nil
 }
 
-// DecryptWithCapsule decrypts using a pre-computed ECDH shared secret (capsule).
+// DecryptWithCapsule decrypts using an XOR-masked capsule obtained via HTLC.
 // Used by buyers who obtained the capsule via HTLC atomic swap.
 //
-// The capsule IS the ECDH shared secret x-coordinate:
+// The buyer recovers the AES key as:
 //
-//	capsule = ECDH(D_node, P_buyer).x
+//	buyer_mask = HKDF(ECDH(D_buyer, P_node).x, key_hash, "bitfs-buyer-mask")
+//	aes_key    = capsule XOR buyer_mask
 //
-// So the AES key is derived as:
+// This works because the seller computed:
 //
-//	aes_key = HKDF-SHA256(capsule, key_hash, "bitfs-file-encryption")
-func DecryptWithCapsule(ciphertext []byte, capsule []byte, keyHash []byte) (*DecryptResult, error) {
+//	capsule = aes_key XOR HKDF(ECDH(D_node, P_buyer).x, key_hash, "bitfs-buyer-mask")
+//
+// and ECDH(D_buyer, P_node) == ECDH(D_node, P_buyer) by ECDH symmetry.
+func DecryptWithCapsule(ciphertext []byte, capsule []byte, keyHash []byte,
+	buyerPrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey) (*DecryptResult, error) {
+	if buyerPrivateKey == nil {
+		return nil, ErrNilPrivateKey
+	}
+	if nodePublicKey == nil {
+		return nil, ErrNilPublicKey
+	}
 	if len(capsule) == 0 {
 		return nil, fmt.Errorf("method42: capsule is empty")
 	}
@@ -162,19 +172,28 @@ func DecryptWithCapsule(ciphertext []byte, capsule []byte, keyHash []byte) (*Dec
 		return nil, fmt.Errorf("%w: key hash must be 32 bytes", ErrKeyHashMismatch)
 	}
 
-	// Derive AES key from capsule (which IS the shared secret x-coordinate)
-	aesKey, err := DeriveAESKey(capsule, keyHash)
+	// 1. sharedBuyer = ECDH(D_buyer, P_node)
+	sharedBuyer, err := ECDH(buyerPrivateKey, nodePublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("method42: capsule ECDH failed: %w", err)
+	}
+
+	// 2. buyerMask = DeriveBuyerMask(sharedBuyer, keyHash)
+	buyerMask, err := DeriveBuyerMask(sharedBuyer, keyHash)
 	if err != nil {
 		return nil, err
 	}
 
-	// Decrypt with AES-256-GCM
+	// 3. aesKey = capsule XOR buyerMask
+	aesKey := xorBytes(capsule, buyerMask)
+
+	// 4. Decrypt with AES-256-GCM
 	plaintext, err := aesGCMDecrypt(ciphertext, aesKey)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify content integrity
+	// 5. Verify content integrity: SHA256(SHA256(plaintext)) == keyHash
 	computedHash := ComputeKeyHash(plaintext)
 	if !bytes.Equal(computedHash, keyHash) {
 		return nil, ErrKeyHashMismatch
@@ -209,12 +228,12 @@ func ReEncrypt(ciphertext []byte, privateKey *ec.PrivateKey, publicKey *ec.Publi
 func aesGCMEncrypt(plaintext, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("%w: AES cipher creation failed: %v", ErrDecryptionFailed, err)
+		return nil, fmt.Errorf("%w: AES cipher creation failed: %w", ErrDecryptionFailed, err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("%w: GCM creation failed: %v", ErrDecryptionFailed, err)
+		return nil, fmt.Errorf("%w: GCM creation failed: %w", ErrDecryptionFailed, err)
 	}
 
 	// Generate random nonce
@@ -223,7 +242,7 @@ func aesGCMEncrypt(plaintext, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("method42: random nonce generation failed: %w", err)
 	}
 
-	// Encrypt: result = nonce || ciphertext || tag
+	// Output format: nonce(12B) || ciphertext || GCM tag(16B)
 	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 	return ciphertext, nil
 }
@@ -237,12 +256,12 @@ func aesGCMDecrypt(ciphertext, key []byte) ([]byte, error) {
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("%w: AES cipher creation failed: %v", ErrDecryptionFailed, err)
+		return nil, fmt.Errorf("%w: AES cipher creation failed: %w", ErrDecryptionFailed, err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("%w: GCM creation failed: %v", ErrDecryptionFailed, err)
+		return nil, fmt.Errorf("%w: GCM creation failed: %w", ErrDecryptionFailed, err)
 	}
 
 	nonceSize := gcm.NonceSize()

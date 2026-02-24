@@ -77,7 +77,10 @@ func FuzzDecryptWithCapsuleNoPanic(f *testing.F) {
 	f.Add(make([]byte, MinCiphertextLen), make([]byte, 32), make([]byte, 32))
 
 	f.Fuzz(func(t *testing.T, ciphertext, capsule, keyHash []byte) {
-		DecryptWithCapsule(ciphertext, capsule, keyHash)
+		// Use a fixed key pair for fuzzing (only checking for panics).
+		priv := FreePrivateKey()
+		pub := priv.PubKey()
+		DecryptWithCapsule(ciphertext, capsule, keyHash, priv, pub)
 	})
 }
 

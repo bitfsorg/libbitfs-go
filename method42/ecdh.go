@@ -57,14 +57,59 @@ func FreePrivateKey() *ec.PrivateKey {
 	return privKey
 }
 
-// ComputeCapsule computes the ECDH capsule for a buyer.
+// ComputeCapsule computes the XOR-masked capsule for a buyer.
 //
-//	capsule = ECDH(D_node, P_buyer).x
+//	capsule = aes_key XOR buyer_mask
 //
-// Used by the seller during the HTLC atomic swap flow.
-// The capsule is the preimage that the seller reveals to claim payment.
-func ComputeCapsule(nodePrivateKey *ec.PrivateKey, buyerPublicKey *ec.PublicKey) ([]byte, error) {
-	return ECDH(nodePrivateKey, buyerPublicKey)
+// where:
+//
+//	aes_key    = HKDF(ECDH(D_node, P_node).x, key_hash, "bitfs-file-encryption")
+//	buyer_mask = HKDF(ECDH(D_node, P_buyer).x, key_hash, "bitfs-buyer-mask")
+//
+// The buyer recovers aes_key by computing buyer_mask from ECDH(D_buyer, P_node)
+// (equivalent by ECDH symmetry) and XORing with the capsule.
+// The capsule is the preimage that the seller reveals to claim HTLC payment.
+func ComputeCapsule(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey,
+	buyerPublicKey *ec.PublicKey, keyHash []byte) ([]byte, error) {
+	// 1. sharedNode = ECDH(D_node, P_node)
+	sharedNode, err := ECDH(nodePrivateKey, nodePublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("method42: capsule ECDH(node,node) failed: %w", err)
+	}
+
+	// 2. aesKey = DeriveAESKey(sharedNode, keyHash)
+	aesKey, err := DeriveAESKey(sharedNode, keyHash)
+	if err != nil {
+		return nil, fmt.Errorf("method42: capsule key derivation failed: %w", err)
+	}
+
+	// 3. sharedBuyer = ECDH(D_node, P_buyer)
+	sharedBuyer, err := ECDH(nodePrivateKey, buyerPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("method42: capsule ECDH(node,buyer) failed: %w", err)
+	}
+
+	// 4. buyerMask = DeriveBuyerMask(sharedBuyer, keyHash)
+	buyerMask, err := DeriveBuyerMask(sharedBuyer, keyHash)
+	if err != nil {
+		return nil, fmt.Errorf("method42: capsule buyer mask derivation failed: %w", err)
+	}
+
+	// 5. capsule = xorBytes(aesKey, buyerMask)
+	return xorBytes(aesKey, buyerMask), nil
+}
+
+// xorBytes XORs two byte slices of equal length.
+func xorBytes(a, b []byte) []byte {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	out := make([]byte, n)
+	for i := 0; i < n; i++ {
+		out[i] = a[i] ^ b[i]
+	}
+	return out
 }
 
 // ComputeCapsuleHash computes SHA256(capsule) for the HTLC hash lock.

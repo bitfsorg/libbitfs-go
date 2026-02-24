@@ -382,8 +382,9 @@ func TestDecryptWithCapsule(t *testing.T) {
 	encResult, err := Encrypt(plaintext, nodePriv, nodePub, AccessPaid)
 	require.NoError(t, err)
 
-	// Seller computes capsule for buyer: ECDH(D_node, P_buyer).x
-	capsule, err := ComputeCapsule(nodePriv, buyerPub)
+	// Seller computes XOR-masked capsule for buyer:
+	// capsule = aes_key XOR buyer_mask
+	capsule, err := ComputeCapsule(nodePriv, nodePub, buyerPub, encResult.KeyHash)
 	require.NoError(t, err)
 
 	// Verify capsule hash works for HTLC
@@ -394,43 +395,32 @@ func TestDecryptWithCapsule(t *testing.T) {
 	recomputedHash := ComputeCapsuleHash(capsule)
 	assert.Equal(t, capsuleHash, recomputedHash)
 
-	// But wait -- the capsule is ECDH(D_node, P_buyer), not ECDH(D_node, P_node).
-	// The buyer needs aes_key = KDF(ECDH(D_node, P_node), key_hash).
-	// In the actual protocol, the capsule is the shared secret between node and buyer
-	// for key transport, not the actual encryption key. The seller provides
-	// the file-encryption capsule = ECDH(D_node, P_node) to the buyer via HTLC.
-	//
-	// Let's test the actual flow:
-	// Seller computes: capsule = ECDH(D_node, P_node).x (the actual file key material)
-	fileCapsule, err := ECDH(nodePriv, nodePub)
-	require.NoError(t, err)
-
-	// Buyer decrypts with capsule
-	decResult, err := DecryptWithCapsule(encResult.Ciphertext, fileCapsule, encResult.KeyHash)
+	// Buyer decrypts with capsule using their private key + node's public key.
+	// buyer_mask = HKDF(ECDH(D_buyer, P_node).x, key_hash, "bitfs-buyer-mask")
+	// aes_key = capsule XOR buyer_mask
+	decResult, err := DecryptWithCapsule(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, nodePub)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decResult.Plaintext)
-
-	// Buyer can also derive capsule from the other direction:
-	// ECDH(D_buyer, P_node) != ECDH(D_node, P_node) in general.
-	// The HTLC reveals ECDH(D_node, P_node) directly, not ECDH(D_node, P_buyer).
-	_ = buyerPriv // buyerPriv is used in the actual protocol for the HTLC handshake
 }
 
 func TestDecryptWithCapsule_EmptyCapsule(t *testing.T) {
-	_, err := DecryptWithCapsule([]byte("ct"), []byte{}, bytes.Repeat([]byte{0x01}, 32))
+	buyerPriv, _ := generateKeyPair(t)
+	_, nodePub := generateKeyPair(t)
+	_, err := DecryptWithCapsule([]byte("ct"), []byte{}, bytes.Repeat([]byte{0x01}, 32), buyerPriv, nodePub)
 	assert.Error(t, err)
 }
 
 func TestDecryptWithCapsule_WrongCapsule(t *testing.T) {
 	privKey, pubKey := generateKeyPair(t)
+	buyerPriv, _ := generateKeyPair(t)
 	plaintext := []byte("test content")
 
 	encResult, err := Encrypt(plaintext, privKey, pubKey, AccessPrivate)
 	require.NoError(t, err)
 
-	// Use wrong capsule
+	// Use wrong capsule — buyer_mask XOR wrong_capsule != correct aes_key
 	wrongCapsule := bytes.Repeat([]byte{0xab}, 32)
-	_, err = DecryptWithCapsule(encResult.Ciphertext, wrongCapsule, encResult.KeyHash)
+	_, err = DecryptWithCapsule(encResult.Ciphertext, wrongCapsule, encResult.KeyHash, buyerPriv, pubKey)
 	assert.Error(t, err, "wrong capsule should fail decryption")
 }
 
@@ -547,8 +537,9 @@ func TestFullEncryptionFlow_Private(t *testing.T) {
 }
 
 func TestFullEncryptionFlow_FreeThenBuy(t *testing.T) {
-	// Simulates: owner creates free file -> makes it paid -> buyer purchases via HTLC
+	// Simulates: owner creates paid file -> buyer purchases via HTLC
 	ownerPriv, ownerPub := generateKeyPair(t)
+	buyerPriv, buyerPub := generateKeyPair(t)
 
 	plaintext := []byte("Premium article about blockchain technology.")
 
@@ -556,8 +547,9 @@ func TestFullEncryptionFlow_FreeThenBuy(t *testing.T) {
 	encResult, err := Encrypt(plaintext, ownerPriv, ownerPub, AccessPrivate)
 	require.NoError(t, err)
 
-	// 2. Buyer initiates purchase. Seller computes capsule = ECDH(D_node, P_node).x
-	capsule, err := ECDH(ownerPriv, ownerPub)
+	// 2. Buyer initiates purchase. Seller computes XOR-masked capsule:
+	// capsule = aes_key XOR buyer_mask
+	capsule, err := ComputeCapsule(ownerPriv, ownerPub, buyerPub, encResult.KeyHash)
 	require.NoError(t, err)
 
 	// 3. Seller provides capsule_hash for HTLC
@@ -565,8 +557,8 @@ func TestFullEncryptionFlow_FreeThenBuy(t *testing.T) {
 	assert.Len(t, capsuleHash, 32)
 
 	// 4. After HTLC is resolved, buyer gets capsule
-	// 5. Buyer decrypts with capsule
-	decResult, err := DecryptWithCapsule(encResult.Ciphertext, capsule, encResult.KeyHash)
+	// 5. Buyer decrypts with capsule using their private key
+	decResult, err := DecryptWithCapsule(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, ownerPub)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decResult.Plaintext)
 }
@@ -601,37 +593,56 @@ func TestEncrypt_LargePlaintext(t *testing.T) {
 // --- Gap 4 (MOST CRITICAL): ErrKeyHashMismatch post-AES content integrity ---
 
 func TestDecrypt_KeyHashMismatch_ContentIntegrity(t *testing.T) {
-	// To trigger lines 137-139 of encrypt.go (post-decryption integrity check),
+	// To trigger post-decryption integrity check in DecryptWithCapsule,
 	// AES decryption must succeed but ComputeKeyHash(plaintext) != keyHash.
 	//
-	// Strategy: use DecryptWithCapsule with the lower-level API:
+	// Strategy with XOR capsule:
 	//  1. Choose plaintext, compute its real keyHash.
-	//  2. Choose a fake keyHash (32 bytes, different from the real one).
-	//  3. Derive an AES key from (capsule, fakeKeyHash) via DeriveAESKey.
-	//  4. Encrypt plaintext with that AES key directly via aesGCMEncrypt.
-	//  5. Call DecryptWithCapsule(ciphertext, capsule, fakeKeyHash).
-	//     AES succeeds (key matches), but ComputeKeyHash(plaintext) != fakeKeyHash.
+	//  2. Choose a fake keyHash (32 bytes, different from real).
+	//  3. Generate buyer/node keypairs, compute buyerMask from fakeKeyHash.
+	//  4. Derive an AES key from fakeKeyHash, encrypt plaintext with it.
+	//  5. Construct capsule = aesKey XOR buyerMask.
+	//  6. Call DecryptWithCapsule — AES succeeds but integrity check fails.
 	plaintext := []byte("content for integrity check")
 	realKeyHash := ComputeKeyHash(plaintext)
 
-	// Fabricate a capsule (any 32-byte value)
-	capsule := bytes.Repeat([]byte{0x42}, 32)
+	buyerPriv, buyerPub := generateKeyPair(t)
+	nodePriv, nodePub := generateKeyPair(t)
 
 	// Fabricate a fake keyHash that differs from the real one
 	fakeKeyHash := bytes.Repeat([]byte{0xaa}, 32)
 	require.NotEqual(t, realKeyHash, fakeKeyHash, "sanity: fake must differ from real")
 
-	// Derive AES key that will be used when DecryptWithCapsule is called with fakeKeyHash
-	aesKey, err := DeriveAESKey(capsule, fakeKeyHash)
+	// Compute buyerMask as DecryptWithCapsule will
+	sharedBuyer, err := ECDH(buyerPriv, nodePub)
+	require.NoError(t, err)
+	buyerMask, err := DeriveBuyerMask(sharedBuyer, fakeKeyHash)
 	require.NoError(t, err)
 
-	// Encrypt the plaintext directly with that AES key (bypassing Encrypt)
+	// Derive AES key from node's self-ECDH with fakeKeyHash
+	sharedNode, err := ECDH(nodePriv, nodePub)
+	require.NoError(t, err)
+	aesKey, err := DeriveAESKey(sharedNode, fakeKeyHash)
+	require.NoError(t, err)
+
+	// Encrypt plaintext directly with that AES key
 	ciphertext, err := aesGCMEncrypt(plaintext, aesKey)
 	require.NoError(t, err)
 
-	// Now DecryptWithCapsule: AES will succeed (key matches), but post-decryption
-	// integrity check will fail because SHA256(SHA256(plaintext)) != fakeKeyHash.
-	_, err = DecryptWithCapsule(ciphertext, capsule, fakeKeyHash)
+	// Construct capsule = aesKey XOR buyerMask (what ComputeCapsule would produce)
+	// Also need to use the ECDH(D_node, P_buyer) shared secret for buyerMask
+	sharedNodeBuyer, err := ECDH(nodePriv, buyerPub)
+	require.NoError(t, err)
+	buyerMaskFromNode, err := DeriveBuyerMask(sharedNodeBuyer, fakeKeyHash)
+	require.NoError(t, err)
+	// ECDH symmetry: buyerMask == buyerMaskFromNode
+	require.Equal(t, buyerMask, buyerMaskFromNode, "ECDH symmetry check")
+
+	capsule := xorBytes(aesKey, buyerMask)
+
+	// Now DecryptWithCapsule: AES will succeed (capsule XOR buyerMask = aesKey),
+	// but integrity check fails because SHA256(SHA256(plaintext)) != fakeKeyHash.
+	_, err = DecryptWithCapsule(ciphertext, capsule, fakeKeyHash, buyerPriv, nodePub)
 	assert.ErrorIs(t, err, ErrKeyHashMismatch,
 		"should return ErrKeyHashMismatch when AES succeeds but content hash differs")
 }
@@ -737,10 +748,12 @@ func TestDecryptWithCapsule_InvalidKeyHashLength(t *testing.T) {
 
 	capsule := bytes.Repeat([]byte{0xab}, 32)
 	ciphertext := bytes.Repeat([]byte{0x00}, MinCiphertextLen) // dummy ciphertext
+	buyerPriv, _ := generateKeyPair(t)
+	_, nodePub := generateKeyPair(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := DecryptWithCapsule(ciphertext, capsule, tt.keyHash)
+			_, err := DecryptWithCapsule(ciphertext, capsule, tt.keyHash, buyerPriv, nodePub)
 			assert.ErrorIs(t, err, ErrKeyHashMismatch,
 				"DecryptWithCapsule should return ErrKeyHashMismatch for non-32-byte keyHash")
 		})
@@ -800,16 +813,27 @@ func TestEncrypt_NilPublicKey(t *testing.T) {
 
 func TestComputeCapsule_NilPrivateKey(t *testing.T) {
 	_, pubKey := generateKeyPair(t)
-	_, err := ComputeCapsule(nil, pubKey)
-	assert.ErrorIs(t, err, ErrNilPrivateKey,
-		"ComputeCapsule should return ErrNilPrivateKey when nodePrivateKey is nil")
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+	_, err := ComputeCapsule(nil, pubKey, pubKey, keyHash)
+	assert.Error(t, err,
+		"ComputeCapsule should fail when nodePrivateKey is nil")
 }
 
-func TestComputeCapsule_NilPublicKey(t *testing.T) {
+func TestComputeCapsule_NilNodePublicKey(t *testing.T) {
 	privKey, _ := generateKeyPair(t)
-	_, err := ComputeCapsule(privKey, nil)
-	assert.ErrorIs(t, err, ErrNilPublicKey,
-		"ComputeCapsule should return ErrNilPublicKey when buyerPublicKey is nil")
+	_, buyerPub := generateKeyPair(t)
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+	_, err := ComputeCapsule(privKey, nil, buyerPub, keyHash)
+	assert.Error(t, err,
+		"ComputeCapsule should fail when nodePublicKey is nil")
+}
+
+func TestComputeCapsule_NilBuyerPublicKey(t *testing.T) {
+	privKey, pubKey := generateKeyPair(t)
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+	_, err := ComputeCapsule(privKey, pubKey, nil, keyHash)
+	assert.Error(t, err,
+		"ComputeCapsule should fail when buyerPublicKey is nil")
 }
 
 // --- Gap 11: ECDH x-coordinate always 32 bytes (zero-padding branch) ---
@@ -1024,4 +1048,132 @@ func TestComputeCapsuleHash_EmptyCapsule(t *testing.T) {
 	// Should be standard SHA256 of empty
 	expected := sha256.Sum256([]byte{})
 	assert.Equal(t, expected[:], hash)
+}
+
+// =============================================================================
+// Benchmarks
+// =============================================================================
+
+// benchKeyPair generates a key pair for benchmarks (does not use testing.B.Helper).
+func benchKeyPair(b *testing.B) (*ec.PrivateKey, *ec.PublicKey) {
+	b.Helper()
+	privKey, err := ec.NewPrivateKey()
+	if err != nil {
+		b.Fatal(err)
+	}
+	return privKey, privKey.PubKey()
+}
+
+func BenchmarkEncrypt(b *testing.B) {
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"64KB", 64 * 1024},
+		{"1MB", 1024 * 1024},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			privKey, pubKey := benchKeyPair(b)
+			plaintext := bytes.Repeat([]byte("x"), sz.size)
+			b.SetBytes(int64(sz.size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := Encrypt(plaintext, privKey, pubKey, AccessPrivate)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkDecrypt(b *testing.B) {
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"64KB", 64 * 1024},
+		{"1MB", 1024 * 1024},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			privKey, pubKey := benchKeyPair(b)
+			plaintext := bytes.Repeat([]byte("x"), sz.size)
+			encResult, err := Encrypt(plaintext, privKey, pubKey, AccessPrivate)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(sz.size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := Decrypt(encResult.Ciphertext, privKey, pubKey, encResult.KeyHash, AccessPrivate)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkEncryptFree(b *testing.B) {
+	_, pubKey := benchKeyPair(b)
+	plaintext := bytes.Repeat([]byte("x"), 1024)
+	b.SetBytes(1024)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := Encrypt(plaintext, nil, pubKey, AccessFree)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkECDH(b *testing.B) {
+	privKey, pubKey := benchKeyPair(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := ECDH(privKey, pubKey)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDeriveAESKey(b *testing.B) {
+	sharedX := bytes.Repeat([]byte{0xab}, 32)
+	keyHash := bytes.Repeat([]byte{0xcd}, 32)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := DeriveAESKey(sharedX, keyHash)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkComputeKeyHash(b *testing.B) {
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"64KB", 64 * 1024},
+		{"1MB", 1024 * 1024},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			data := bytes.Repeat([]byte("x"), sz.size)
+			b.SetBytes(int64(sz.size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				ComputeKeyHash(data)
+			}
+		})
+	}
 }

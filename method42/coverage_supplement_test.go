@@ -145,12 +145,28 @@ func TestDecrypt_TamperedCiphertextAllModes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDecryptWithCapsule_BadKeyHashLen(t *testing.T) {
-	_, err := DecryptWithCapsule(make([]byte, 64), []byte("capsule"), make([]byte, 16))
+	buyerPriv, _ := genKP(t)
+	_, nodePub := genKP(t)
+	_, err := DecryptWithCapsule(make([]byte, 64), []byte("capsule"), make([]byte, 16), buyerPriv, nodePub)
 	assert.ErrorIs(t, err, ErrKeyHashMismatch)
 }
 
+func TestDecryptWithCapsule_NilBuyerKey(t *testing.T) {
+	_, nodePub := genKP(t)
+	_, err := DecryptWithCapsule(make([]byte, 64), make([]byte, 32), make([]byte, 32), nil, nodePub)
+	assert.ErrorIs(t, err, ErrNilPrivateKey)
+}
+
+func TestDecryptWithCapsule_NilNodePubKey(t *testing.T) {
+	buyerPriv, _ := genKP(t)
+	_, err := DecryptWithCapsule(make([]byte, 64), make([]byte, 32), make([]byte, 32), buyerPriv, nil)
+	assert.ErrorIs(t, err, ErrNilPublicKey)
+}
+
 func TestDecryptWithCapsule_TooShortCiphertext(t *testing.T) {
-	_, err := DecryptWithCapsule(make([]byte, 5), make([]byte, 32), make([]byte, 32))
+	buyerPriv, _ := genKP(t)
+	_, nodePub := genKP(t)
+	_, err := DecryptWithCapsule(make([]byte, 5), make([]byte, 32), make([]byte, 32), buyerPriv, nodePub)
 	assert.ErrorIs(t, err, ErrInvalidCiphertext)
 }
 
@@ -161,11 +177,11 @@ func TestDecryptWithCapsule_WrongCapsuleDecryptFails(t *testing.T) {
 
 	buyer, err := ec.NewPrivateKey()
 	require.NoError(t, err)
-	capsule, err := ComputeCapsule(priv, buyer.PubKey())
+	capsule, err := ComputeCapsule(priv, pub, buyer.PubKey(), result.KeyHash)
 	require.NoError(t, err)
 
 	wrongCapsule := make([]byte, len(capsule))
-	_, err = DecryptWithCapsule(result.Ciphertext, wrongCapsule, result.KeyHash)
+	_, err = DecryptWithCapsule(result.Ciphertext, wrongCapsule, result.KeyHash, buyer, pub)
 	assert.Error(t, err)
 }
 

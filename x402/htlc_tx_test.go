@@ -10,7 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tongxiaofeng/libbitfs/method42"
+	"github.com/tongxiaofeng/libbitfs-go/method42"
 )
 
 func TestVerifyHTLCFunding(t *testing.T) {
@@ -22,13 +22,19 @@ func TestVerifyHTLCFunding(t *testing.T) {
 	for i := 1; i < 33; i++ {
 		buyerPubKey[i] = byte(i)
 	}
+	sellerPubKey := make([]byte, 33)
+	sellerPubKey[0] = 0x03
+	for i := 1; i < 33; i++ {
+		sellerPubKey[i] = byte(i + 50)
+	}
 
 	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey: buyerPubKey,
-		SellerAddr:  sellerAddr,
-		CapsuleHash: capsuleHash,
-		Amount:      1000,
-		Timeout:     144,
+		BuyerPubKey:  buyerPubKey,
+		SellerPubKey: sellerPubKey,
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash,
+		Amount:       1000,
+		Timeout:      144,
 	})
 	require.NoError(t, err)
 
@@ -99,7 +105,11 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 	buyerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
 
-	sellerAddr := bytes.Repeat([]byte{0xcd}, 20)
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerAddr := sellerPriv.PubKey().Hash()
+	sellerPubKey := sellerPriv.PubKey().Compressed()
 	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
 	changeAddr := buyerPriv.PubKey().Hash()
 
@@ -113,6 +123,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 		result, err := BuildHTLCFundingTx(&HTLCFundingParams{
 			BuyerPrivKey: buyerPriv,
 			SellerAddr:   sellerAddr,
+			SellerPubKey: sellerPubKey,
 			CapsuleHash:  capsuleHash,
 			Amount:       1000,
 			Timeout:      144,
@@ -131,7 +142,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 		require.NotEmpty(t, result.TxID)
 		require.NotEmpty(t, result.HTLCScript)
 		assert.Equal(t, uint32(0), result.HTLCVout)
-		assert.GreaterOrEqual(t, result.HTLCAmount, uint64(1000))
+		assert.Equal(t, uint64(1000), result.HTLCAmount)
 
 		// Verify the funding tx with VerifyHTLCFunding.
 		vout, err := VerifyHTLCFunding(result.RawTx, result.HTLCScript, 1000)
@@ -139,12 +150,13 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 		assert.Equal(t, uint32(0), vout)
 	})
 
-	t.Run("amount enforces dust limit", func(t *testing.T) {
+	t.Run("small amount passes through as-is", func(t *testing.T) {
 		result, err := BuildHTLCFundingTx(&HTLCFundingParams{
 			BuyerPrivKey: buyerPriv,
 			SellerAddr:   sellerAddr,
+			SellerPubKey: sellerPubKey,
 			CapsuleHash:  capsuleHash,
-			Amount:       100, // Below dust limit (546)
+			Amount:       100, // Small amount (no dust limit enforcement)
 			Timeout:      144,
 			UTXOs: []*HTLCUTXO{{
 				TxID:         mockTxID[:],
@@ -156,7 +168,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 			FeeRate:    1,
 		})
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, result.HTLCAmount, uint64(546))
+		assert.Equal(t, uint64(100), result.HTLCAmount, "amount should pass through without dust adjustment")
 	})
 
 	t.Run("nil params", func(t *testing.T) {
@@ -168,6 +180,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 		_, err := BuildHTLCFundingTx(&HTLCFundingParams{
 			BuyerPrivKey: buyerPriv,
 			SellerAddr:   sellerAddr,
+			SellerPubKey: sellerPubKey,
 			CapsuleHash:  capsuleHash,
 			Amount:       1000,
 			Timeout:      144,
@@ -181,6 +194,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 		_, err := BuildHTLCFundingTx(&HTLCFundingParams{
 			BuyerPrivKey: buyerPriv,
 			SellerAddr:   sellerAddr,
+			SellerPubKey: sellerPubKey,
 			CapsuleHash:  capsuleHash,
 			Amount:       100000,
 			Timeout:      144,
@@ -210,11 +224,12 @@ func TestBuildSellerClaimTx(t *testing.T) {
 
 	// Build HTLC script.
 	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey: buyerPriv.PubKey().Compressed(),
-		SellerAddr:  sellerAddr,
-		CapsuleHash: capsuleHash[:],
-		Amount:      1000,
-		Timeout:     144,
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash[:],
+		Amount:       1000,
+		Timeout:      144,
 	})
 	require.NoError(t, err)
 
@@ -253,6 +268,71 @@ func TestBuildSellerClaimTx(t *testing.T) {
 	})
 }
 
+func TestBuildSellerPreSignedRefund(t *testing.T) {
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
+	sellerAddr := sellerPriv.PubKey().Hash()
+	buyerAddr := buyerPriv.PubKey().Hash()
+
+	htlcScript, err := BuildHTLC(&HTLCParams{
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash,
+		Amount:       1000,
+		Timeout:      144,
+	})
+	require.NoError(t, err)
+
+	mockTxID := sha256.Sum256([]byte("htlc-funding-txid"))
+
+	t.Run("valid seller pre-sign", func(t *testing.T) {
+		result, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+			FundingTxID:     mockTxID[:],
+			FundingVout:     0,
+			FundingAmount:   1000,
+			HTLCScript:      htlcScript,
+			SellerPrivKey:   sellerPriv,
+			BuyerOutputAddr: buyerAddr,
+			Timeout:         144,
+			FeeRate:         1,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.NotEmpty(t, result.TxBytes)
+		require.NotEmpty(t, result.SellerSig)
+
+		// Verify the tx structure.
+		tx, err := transaction.NewTransactionFromBytes(result.TxBytes)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(144), tx.LockTime)
+		assert.Equal(t, uint32(0xfffffffe), tx.Inputs[0].SequenceNumber)
+	})
+
+	t.Run("nil params", func(t *testing.T) {
+		_, err := BuildSellerPreSignedRefund(nil)
+		require.Error(t, err)
+	})
+
+	t.Run("timeout zero rejected", func(t *testing.T) {
+		_, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+			FundingTxID:     mockTxID[:],
+			FundingVout:     0,
+			FundingAmount:   1000,
+			HTLCScript:      htlcScript,
+			SellerPrivKey:   sellerPriv,
+			BuyerOutputAddr: buyerAddr,
+			Timeout:         0,
+		})
+		require.Error(t, err)
+	})
+}
+
 func TestBuildBuyerRefundTx(t *testing.T) {
 	sellerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
@@ -265,26 +345,37 @@ func TestBuildBuyerRefundTx(t *testing.T) {
 	buyerAddr := buyerPriv.PubKey().Hash()
 
 	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey: buyerPriv.PubKey().Compressed(),
-		SellerAddr:  sellerAddr,
-		CapsuleHash: capsuleHash,
-		Amount:      1000,
-		Timeout:     144,
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash,
+		Amount:       1000,
+		Timeout:      144,
 	})
 	require.NoError(t, err)
 
 	mockTxID := sha256.Sum256([]byte("htlc-funding-txid"))
 
+	// First, get the seller's pre-signed refund.
+	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+		FundingTxID:     mockTxID[:],
+		FundingVout:     0,
+		FundingAmount:   1000,
+		HTLCScript:      htlcScript,
+		SellerPrivKey:   sellerPriv,
+		BuyerOutputAddr: buyerAddr,
+		Timeout:         144,
+		FeeRate:         1,
+	})
+	require.NoError(t, err)
+
 	t.Run("valid buyer refund", func(t *testing.T) {
 		refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			FundingTxID:   mockTxID[:],
-			FundingVout:   0,
-			FundingAmount: 1000,
-			HTLCScript:    htlcScript,
-			BuyerPrivKey:  buyerPriv,
-			OutputAddr:    buyerAddr,
-			Locktime:      144, // exactly the timeout
-			FeeRate:       1,
+			SellerPreSignedTx: preSign.TxBytes,
+			SellerSig:         preSign.SellerSig,
+			HTLCScript:        htlcScript,
+			FundingAmount:     1000,
+			BuyerPrivKey:      buyerPriv,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, refundTx)
@@ -292,34 +383,38 @@ func TestBuildBuyerRefundTx(t *testing.T) {
 		// Verify nLockTime is set.
 		assert.Equal(t, uint32(144), refundTx.LockTime)
 
-		// Verify the unlocking script has OP_FALSE (0x00) at end.
+		// Verify the unlocking script has OP_FALSE at end (selects ELSE branch).
 		chunks, err := refundTx.Inputs[0].UnlockingScript.Chunks()
 		require.NoError(t, err)
 		lastChunk := chunks[len(chunks)-1]
 		assert.Equal(t, script.OpFALSE, lastChunk.Op)
-	})
 
-	t.Run("locktime zero rejected", func(t *testing.T) {
-		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			FundingTxID:   mockTxID[:],
-			FundingVout:   0,
-			FundingAmount: 1000,
-			HTLCScript:    htlcScript,
-			BuyerPrivKey:  buyerPriv,
-			OutputAddr:    buyerAddr,
-			Locktime:      0,
-		})
-		require.Error(t, err)
+		// Verify first chunk is also OP_FALSE/OP_0 (CHECKMULTISIG dummy).
+		assert.Equal(t, script.OpFALSE, chunks[0].Op)
+
+		// Verify there are 4 chunks: OP_0 <buyer_sig> <seller_sig> OP_FALSE
+		assert.Len(t, chunks, 4)
 	})
 
 	t.Run("nil params", func(t *testing.T) {
 		_, err := BuildBuyerRefundTx(nil)
 		require.Error(t, err)
 	})
+
+	t.Run("empty pre-signed tx", func(t *testing.T) {
+		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			SellerPreSignedTx: nil,
+			SellerSig:         preSign.SellerSig,
+			HTLCScript:        htlcScript,
+			FundingAmount:     1000,
+			BuyerPrivKey:      buyerPriv,
+		})
+		require.Error(t, err)
+	})
 }
 
 // TestHTLCRoundTrip tests the full HTLC lifecycle in memory:
-// encrypt → invoice → build funding tx → verify funding → build claim → extract preimage → decrypt
+// encrypt -> invoice -> build funding tx -> verify funding -> build claim -> extract preimage -> decrypt
 func TestHTLCRoundTrip(t *testing.T) {
 	// Generate seller and buyer keys.
 	sellerPriv, err := ec.NewPrivateKey()
@@ -331,25 +426,23 @@ func TestHTLCRoundTrip(t *testing.T) {
 	sellerAddr := sellerPriv.PubKey().Hash()
 	buyerAddr := buyerPriv.PubKey().Hash()
 
-	// --- Seller side: encrypt content and compute capsule ---
+	// --- Seller side: encrypt content and compute XOR-masked capsule ---
 	plaintext := []byte("Top secret BitFS content for HTLC atomic swap test")
 
 	encResult, err := method42.Encrypt(plaintext, sellerPriv, sellerPriv.PubKey(), method42.AccessPaid)
 	require.NoError(t, err)
 
-	// Capsule = ECDH(D_seller, P_seller).x (owner's shared secret).
-	capsule, err := method42.ECDH(sellerPriv, sellerPriv.PubKey())
+	// Capsule = aes_key XOR buyer_mask (XOR masking, buyer-specific).
+	capsule, err := method42.ComputeCapsule(sellerPriv, sellerPriv.PubKey(), buyerPriv.PubKey(), encResult.KeyHash)
 	require.NoError(t, err)
 
 	capsuleHash := method42.ComputeCapsuleHash(capsule)
 
 	// --- Create invoice ---
-	// Use a price high enough that the claim output exceeds dust (546 sats).
 	pricePerKB := uint64(50000)
 	fileSize := uint64(len(plaintext))
 	invoice := NewInvoice(pricePerKB, fileSize, "1SellerAddr", capsuleHash, 3600)
 	require.NotNil(t, invoice)
-	require.Greater(t, invoice.Price, dustLimit, "invoice price must exceed dust for claim tx")
 
 	// --- Buyer side: build HTLC funding tx ---
 	mockTxID := sha256.Sum256([]byte("buyer-utxo-txid"))
@@ -358,6 +451,7 @@ func TestHTLCRoundTrip(t *testing.T) {
 	fundingResult, err := BuildHTLCFundingTx(&HTLCFundingParams{
 		BuyerPrivKey: buyerPriv,
 		SellerAddr:   sellerAddr,
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
 		CapsuleHash:  capsuleHash,
 		Amount:       invoice.Price,
 		Timeout:      DefaultHTLCTimeout,
@@ -399,15 +493,15 @@ func TestHTLCRoundTrip(t *testing.T) {
 	extractedHash := sha256.Sum256(extractedCapsule)
 	assert.Equal(t, capsuleHash, extractedHash[:])
 
-	// --- Buyer side: decrypt content ---
-	decResult, err := method42.DecryptWithCapsule(encResult.Ciphertext, extractedCapsule, encResult.KeyHash)
+	// --- Buyer side: decrypt content using capsule + buyer's private key ---
+	decResult, err := method42.DecryptWithCapsule(encResult.Ciphertext, extractedCapsule, encResult.KeyHash, buyerPriv, sellerPriv.PubKey())
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decResult.Plaintext)
 
 	t.Logf("HTLC round-trip: encrypt -> fund -> claim -> extract -> decrypt OK (%d bytes)", len(plaintext))
 }
 
-// TestHTLCBuyerRefundRoundTrip tests the buyer refund path.
+// TestHTLCBuyerRefundRoundTrip tests the buyer refund path via pre-signed 2-of-2 multisig.
 func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	sellerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
@@ -426,6 +520,7 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	fundingResult, err := BuildHTLCFundingTx(&HTLCFundingParams{
 		BuyerPrivKey: buyerPriv,
 		SellerAddr:   sellerAddr,
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
 		CapsuleHash:  capsuleHash,
 		Amount:       1000,
 		Timeout:      144,
@@ -440,16 +535,26 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Build refund tx.
+	// Seller pre-signs refund.
+	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+		FundingTxID:     fundingResult.TxID,
+		FundingVout:     fundingResult.HTLCVout,
+		FundingAmount:   fundingResult.HTLCAmount,
+		HTLCScript:      fundingResult.HTLCScript,
+		SellerPrivKey:   sellerPriv,
+		BuyerOutputAddr: buyerAddr,
+		Timeout:         144,
+		FeeRate:         1,
+	})
+	require.NoError(t, err)
+
+	// Buyer counter-signs refund.
 	refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
-		FundingTxID:   fundingResult.TxID,
-		FundingVout:   fundingResult.HTLCVout,
-		FundingAmount: fundingResult.HTLCAmount,
-		HTLCScript:    fundingResult.HTLCScript,
-		BuyerPrivKey:  buyerPriv,
-		OutputAddr:    buyerAddr,
-		Locktime:      144,
-		FeeRate:       1,
+		SellerPreSignedTx: preSign.TxBytes,
+		SellerSig:         preSign.SellerSig,
+		HTLCScript:        fundingResult.HTLCScript,
+		FundingAmount:     fundingResult.HTLCAmount,
+		BuyerPrivKey:      buyerPriv,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, refundTx)
