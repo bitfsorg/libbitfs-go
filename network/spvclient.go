@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/tongxiaofeng/libbitfs/spv"
+	"github.com/tongxiaofeng/libbitfs-go/spv"
 )
 
 // VerifyResult holds the result of an SPV verification.
@@ -56,12 +56,15 @@ func (s *SPVClient) VerifyTx(ctx context.Context, txid string) (*VerifyResult, e
 	}
 
 	// Ensure we have the block header.
-	blockHashBytes, err := hex.DecodeString(status.BlockHash)
+	// Block hash from RPC is in display hex (big-endian); convert to internal
+	// byte order for header store lookup (which keys by DoubleHash output).
+	blockHashDisplay, err := hex.DecodeString(status.BlockHash)
 	if err != nil {
 		return nil, fmt.Errorf("network: invalid block hash: %w", err)
 	}
+	blockHashInternal := reverseBytesCopy(blockHashDisplay)
 
-	header, err := s.headers.GetHeader(blockHashBytes)
+	header, err := s.headers.GetHeader(blockHashInternal)
 	if err != nil {
 		// Header not in store — fetch and store it.
 		rawHeader, fetchErr := s.chain.GetBlockHeader(ctx, status.BlockHash)
@@ -85,22 +88,24 @@ func (s *SPVClient) VerifyTx(ctx context.Context, txid string) (*VerifyResult, e
 		return nil, fmt.Errorf("network: fetch merkle proof: %w", err)
 	}
 
-	txidBytes, err := hex.DecodeString(proof.TxID)
+	txidDisplayBytes, err := hex.DecodeString(proof.TxID)
 	if err != nil {
 		return nil, fmt.Errorf("network: invalid txid: %w", err)
 	}
+	// Convert display txid (big-endian) to internal byte order for Merkle verification.
+	txidInternal := reverseBytesCopy(txidDisplayBytes)
 
 	// Single-tx block: txHash IS the Merkle root, no branches needed.
 	if len(proof.Branches) == 0 && proof.Index == 0 {
-		if !bytesEqual(txidBytes, header.MerkleRoot) {
+		if !bytesEqual(txidInternal, header.MerkleRoot) {
 			return nil, fmt.Errorf("network: merkle proof verification failed for tx %s", txid)
 		}
 	} else {
 		spvProof := &spv.MerkleProof{
-			TxID:      txidBytes,
+			TxID:      txidInternal,
 			Index:     uint32(proof.Index),
 			Nodes:     proof.Branches,
-			BlockHash: blockHashBytes,
+			BlockHash: blockHashInternal,
 		}
 
 		ok, verifyErr := spv.VerifyMerkleProof(spvProof, header.MerkleRoot)

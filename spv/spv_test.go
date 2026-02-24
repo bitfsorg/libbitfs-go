@@ -534,7 +534,7 @@ func TestVerifyTransaction_Valid(t *testing.T) {
 
 	storedTx := &StoredTx{
 		TxID:        txHash,
-		RawTx:       []byte("fake raw tx"),
+		RawTx:       []byte{0x42}, // DoubleHash([]byte{0x42}) == makeTxHash(0x42)
 		Proof:       proof,
 		BlockHeight: 100,
 	}
@@ -563,7 +563,6 @@ func TestVerifyTransaction_InvalidTxID(t *testing.T) {
 func TestVerifyTransaction_Unconfirmed(t *testing.T) {
 	tx := &StoredTx{
 		TxID:  makeHash(0x01),
-		RawTx: []byte("tx data"),
 		Proof: nil, // unconfirmed
 	}
 	err := VerifyTransaction(tx, NewMemHeaderStore())
@@ -572,8 +571,7 @@ func TestVerifyTransaction_Unconfirmed(t *testing.T) {
 
 func TestVerifyTransaction_MismatchTxID(t *testing.T) {
 	tx := &StoredTx{
-		TxID:  makeHash(0x01),
-		RawTx: []byte("tx data"),
+		TxID: makeHash(0x01),
 		Proof: &MerkleProof{
 			TxID:      makeHash(0x02), // different from StoredTx.TxID
 			Index:     0,
@@ -590,7 +588,7 @@ func TestVerifyTransaction_HeaderNotFound(t *testing.T) {
 
 	tx := &StoredTx{
 		TxID:  txHash,
-		RawTx: []byte("tx data"),
+		RawTx: []byte{0x42}, // DoubleHash([]byte{0x42}) == makeTxHash(0x42)
 		Proof: &MerkleProof{
 			TxID:      txHash,
 			Index:     0,
@@ -846,7 +844,7 @@ func TestVerifyTransaction_InvalidBlockHashLength(t *testing.T) {
 
 	tx := &StoredTx{
 		TxID:  txHash,
-		RawTx: []byte("tx data"),
+		RawTx: []byte{0x42}, // DoubleHash([]byte{0x42}) == makeTxHash(0x42)
 		Proof: &MerkleProof{
 			TxID:      txHash,
 			Index:     0,
@@ -864,18 +862,18 @@ func TestVerifyTransaction_InvalidBlockHashLength(t *testing.T) {
 // mockNilHeaderStore returns (nil, nil) from GetHeader to test the defensive nil check.
 type mockNilHeaderStore struct{}
 
-func (m *mockNilHeaderStore) PutHeader(_ *BlockHeader) error                { return nil }
-func (m *mockNilHeaderStore) GetHeader(_ []byte) (*BlockHeader, error)      { return nil, nil }
+func (m *mockNilHeaderStore) PutHeader(_ *BlockHeader) error                   { return nil }
+func (m *mockNilHeaderStore) GetHeader(_ []byte) (*BlockHeader, error)         { return nil, nil }
 func (m *mockNilHeaderStore) GetHeaderByHeight(_ uint32) (*BlockHeader, error) { return nil, nil }
-func (m *mockNilHeaderStore) GetTip() (*BlockHeader, error)                 { return nil, nil }
-func (m *mockNilHeaderStore) GetHeaderCount() (uint64, error)               { return 0, nil }
+func (m *mockNilHeaderStore) GetTip() (*BlockHeader, error)                    { return nil, nil }
+func (m *mockNilHeaderStore) GetHeaderCount() (uint64, error)                  { return 0, nil }
 
 func TestVerifyTransaction_HeaderStoreReturnsNilNil(t *testing.T) {
 	txHash := makeTxHash(0x42)
 
 	tx := &StoredTx{
 		TxID:  txHash,
-		RawTx: []byte("tx data"),
+		RawTx: []byte{0x42}, // DoubleHash([]byte{0x42}) == makeTxHash(0x42)
 		Proof: &MerkleProof{
 			TxID:      txHash,
 			Index:     0,
@@ -907,7 +905,7 @@ func TestVerifyTransaction_MerkleRootMismatch(t *testing.T) {
 
 	tx := &StoredTx{
 		TxID:  txHash,
-		RawTx: []byte("tx data"),
+		RawTx: []byte{0x42}, // DoubleHash([]byte{0x42}) == makeTxHash(0x42)
 		Proof: &MerkleProof{
 			TxID:      txHash,
 			Index:     0,
@@ -1381,4 +1379,186 @@ func TestMemHeaderStore_HeightCollision(t *testing.T) {
 	count, err := store.GetHeaderCount()
 	require.NoError(t, err)
 	assert.Equal(t, uint64(2), count)
+}
+
+// =============================================================================
+// Benchmarks
+// =============================================================================
+
+func BenchmarkDoubleHash(b *testing.B) {
+	data := bytes.Repeat([]byte{0x42}, 32)
+	b.SetBytes(32)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		DoubleHash(data)
+	}
+}
+
+func BenchmarkComputeMerkleRoot(b *testing.B) {
+	b.Run("depth_1", func(b *testing.B) {
+		txHash := makeTxHash(0x01)
+		sibling := makeTxHash(0x02)
+		proofNodes := [][]byte{sibling}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ComputeMerkleRoot(txHash, 0, proofNodes)
+		}
+	})
+
+	b.Run("depth_3", func(b *testing.B) {
+		// Simulate proof for an 8-tx block
+		txHash := makeTxHash(0x01)
+		proofNodes := [][]byte{
+			makeTxHash(0x02),
+			makeTxHash(0x03),
+			makeTxHash(0x04),
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ComputeMerkleRoot(txHash, 5, proofNodes)
+		}
+	})
+
+	b.Run("depth_10", func(b *testing.B) {
+		txHash := makeTxHash(0x01)
+		proofNodes := make([][]byte, 10)
+		for i := range proofNodes {
+			proofNodes[i] = makeTxHash(byte(i + 0x10))
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ComputeMerkleRoot(txHash, 42, proofNodes)
+		}
+	})
+}
+
+func BenchmarkVerifyMerkleProof(b *testing.B) {
+	txHash := makeTxHash(0x42)
+	proof, merkleRoot := buildTestProof(txHash)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		valid, err := VerifyMerkleProof(proof, merkleRoot)
+		if err != nil || !valid {
+			b.Fatal("proof verification failed")
+		}
+	}
+}
+
+func BenchmarkBuildMerkleTree(b *testing.B) {
+	b.Run("4_txs", func(b *testing.B) {
+		txs := make([][]byte, 4)
+		for i := range txs {
+			txs[i] = makeTxHash(byte(i))
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			BuildMerkleTree(txs)
+		}
+	})
+
+	b.Run("64_txs", func(b *testing.B) {
+		txs := make([][]byte, 64)
+		for i := range txs {
+			txs[i] = makeTxHash(byte(i))
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			BuildMerkleTree(txs)
+		}
+	})
+
+	b.Run("1024_txs", func(b *testing.B) {
+		txs := make([][]byte, 1024)
+		for i := range txs {
+			txs[i] = makeTxHash(byte(i % 256))
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			BuildMerkleTree(txs)
+		}
+	})
+}
+
+func BenchmarkSerializeHeader(b *testing.B) {
+	h := &BlockHeader{
+		Version:    2,
+		PrevBlock:  makeHash(0xAA),
+		MerkleRoot: makeHash(0xBB),
+		Timestamp:  1700000000,
+		Bits:       0x1d00ffff,
+		Nonce:      42,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		SerializeHeader(h)
+	}
+}
+
+func BenchmarkDeserializeHeader(b *testing.B) {
+	h := &BlockHeader{
+		Version:    2,
+		PrevBlock:  makeHash(0xAA),
+		MerkleRoot: makeHash(0xBB),
+		Timestamp:  1700000000,
+		Bits:       0x1d00ffff,
+		Nonce:      42,
+	}
+	data := SerializeHeader(h)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := DeserializeHeader(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVerifyTransaction(b *testing.B) {
+	txHash := makeTxHash(0x42)
+	proof, merkleRoot := buildTestProof(txHash)
+
+	header := buildTestHeader(100, makeHash(0x00), merkleRoot)
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	if err := headerStore.PutHeader(header); err != nil {
+		b.Fatal(err)
+	}
+
+	storedTx := &StoredTx{
+		TxID:        txHash,
+		RawTx:       []byte{0x42}, // DoubleHash([]byte{0x42}) == makeTxHash(0x42)
+		Proof:       proof,
+		BlockHeight: 100,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err := VerifyTransaction(storedTx, headerStore)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkComputeHeaderHash(b *testing.B) {
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  makeHash(0x00),
+		MerkleRoot: makeHash(0x11),
+		Timestamp:  1700000000,
+		Bits:       0x1d00ffff,
+		Nonce:      42,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ComputeHeaderHash(h)
+	}
 }

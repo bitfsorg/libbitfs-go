@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tongxiaofeng/libbitfs/tx"
+	"github.com/tongxiaofeng/libbitfs-go/tx"
 )
 
 // FuzzDeserializePayload ensures the TLV parser never panics on arbitrary input.
@@ -58,9 +58,9 @@ func FuzzDeserializeChildEntry(f *testing.F) {
 // back preserves all fields.
 func FuzzSerializeParseRoundTrip(f *testing.F) {
 	f.Add(
-		uint8(0),  // nodeType: FILE
-		uint8(0),  // op: CREATE
-		uint8(0),  // access: PRIVATE
+		uint8(0), // nodeType: FILE
+		uint8(0), // op: CREATE
+		uint8(0), // access: PRIVATE
 		"text/plain",
 		uint64(1024),
 		uint64(100),
@@ -70,9 +70,9 @@ func FuzzSerializeParseRoundTrip(f *testing.F) {
 		false, // onChain
 	)
 	f.Add(
-		uint8(1),  // DIR
-		uint8(1),  // UPDATE
-		uint8(1),  // FREE
+		uint8(1), // DIR
+		uint8(1), // UPDATE
+		uint8(1), // FREE
 		"",
 		uint64(0),
 		uint64(0),

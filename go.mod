@@ -1,10 +1,11 @@
-module github.com/tongxiaofeng/libbitfs
+module github.com/tongxiaofeng/libbitfs-go
 
 go 1.25.6
 
 require (
 	github.com/bsv-blockchain/go-sdk v1.2.18
 	github.com/stretchr/testify v1.11.1
+	go.etcd.io/bbolt v1.4.3
 	golang.org/x/crypto v0.48.0
 )
 

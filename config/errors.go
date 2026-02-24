@@ -8,7 +8,7 @@ import "errors"
 
 var (
 	// ErrInvalidNetwork indicates the network name is not recognized.
-	ErrInvalidNetwork = errors.New("config: invalid network (must be \"mainnet\" or \"testnet\")")
+	ErrInvalidNetwork = errors.New("config: invalid network (must be \"mainnet\", \"testnet\", \"teratestnet\", or \"regtest\")")
 
 	// ErrInvalidListenAddr indicates the listen address is malformed.
 	ErrInvalidListenAddr = errors.New("config: invalid listen address")

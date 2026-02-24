@@ -61,7 +61,7 @@ func NewWallet(seed []byte, network *NetworkConfig) (*Wallet, error) {
 
 	masterKey, err := bip32.NewMaster(seed, net)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrDerivationFailed, err)
 	}
 
 	return &Wallet{
@@ -80,19 +80,19 @@ func (w *Wallet) deriveAccount(account uint32) (*bip32.ExtendedKey, error) {
 	// m/44'
 	purpose, err := w.masterKey.Child(PurposeBIP44 + Hardened)
 	if err != nil {
-		return nil, fmt.Errorf("%w: purpose derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: purpose derivation: %w", ErrDerivationFailed, err)
 	}
 
 	// m/44'/236'
 	coinType, err := purpose.Child(CoinTypeBitFS + Hardened)
 	if err != nil {
-		return nil, fmt.Errorf("%w: coin type derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: coin type derivation: %w", ErrDerivationFailed, err)
 	}
 
 	// m/44'/236'/account'
 	accountKey, err := coinType.Child(account + Hardened)
 	if err != nil {
-		return nil, fmt.Errorf("%w: account derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: account derivation: %w", ErrDerivationFailed, err)
 	}
 
 	return accountKey, nil
@@ -112,13 +112,13 @@ func (w *Wallet) DeriveFeeKey(chain, index uint32) (*KeyPair, error) {
 	// m/44'/236'/0'/chain
 	chainKey, err := accountKey.Child(chain)
 	if err != nil {
-		return nil, fmt.Errorf("%w: chain derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: chain derivation: %w", ErrDerivationFailed, err)
 	}
 
 	// m/44'/236'/0'/chain/index
 	childKey, err := chainKey.Child(index)
 	if err != nil {
-		return nil, fmt.Errorf("%w: index derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: index derivation: %w", ErrDerivationFailed, err)
 	}
 
 	return extKeyToKeyPair(childKey, fmt.Sprintf("m/44'/236'/0'/%d/%d", chain, index))
@@ -158,13 +158,13 @@ func (w *Wallet) DeriveNodeKey(vaultIndex uint32, filePath []uint32, hardened []
 	// m/44'/236'/(V+1)'/0 (external chain)
 	chainKey, err := accountKey.Child(ExternalChain)
 	if err != nil {
-		return nil, fmt.Errorf("%w: chain derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: chain derivation: %w", ErrDerivationFailed, err)
 	}
 
 	// m/44'/236'/(V+1)'/0/0 (root directory)
 	current, err := chainKey.Child(0)
 	if err != nil {
-		return nil, fmt.Errorf("%w: root derivation: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: root derivation: %w", ErrDerivationFailed, err)
 	}
 
 	// Build human-readable path
@@ -188,7 +188,7 @@ func (w *Wallet) DeriveNodeKey(vaultIndex uint32, filePath []uint32, hardened []
 
 		current, err = current.Child(childIdx)
 		if err != nil {
-			return nil, fmt.Errorf("%w: path derivation at depth %d: %v", ErrDerivationFailed, i, err)
+			return nil, fmt.Errorf("%w: path derivation at depth %d: %w", ErrDerivationFailed, i, err)
 		}
 	}
 
@@ -209,7 +209,7 @@ func (w *Wallet) DeriveNodePubKey(vaultIndex uint32, filePath []uint32, hardened
 func extKeyToKeyPair(extKey *bip32.ExtendedKey, path string) (*KeyPair, error) {
 	privKey, err := extKey.ECPrivKey()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to extract EC private key: %v", ErrDerivationFailed, err)
+		return nil, fmt.Errorf("%w: failed to extract EC private key: %w", ErrDerivationFailed, err)
 	}
 
 	pubKey := privKey.PubKey()

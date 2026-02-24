@@ -40,6 +40,14 @@ func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 		return fmt.Errorf("%w: TxID must be %d bytes", ErrInvalidTxID, HashSize)
 	}
 
+	// Verify RawTx integrity: DoubleSHA256(RawTx) must match TxID.
+	if len(tx.RawTx) > 0 {
+		computed := DoubleHash(tx.RawTx)
+		if !bytes.Equal(computed, tx.TxID) {
+			return fmt.Errorf("%w: RawTx hash does not match TxID", ErrInvalidTxID)
+		}
+	}
+
 	// Step 2: Must have a Merkle proof (confirmed transaction)
 	if tx.Proof == nil {
 		return ErrUnconfirmed
@@ -57,7 +65,7 @@ func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 
 	header, err := headers.GetHeader(tx.Proof.BlockHash)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrHeaderNotFound, err)
+		return fmt.Errorf("%w: %w", ErrHeaderNotFound, err)
 	}
 	if header == nil {
 		return ErrHeaderNotFound

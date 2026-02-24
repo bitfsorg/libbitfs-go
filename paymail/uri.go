@@ -90,7 +90,8 @@ func ParseURI(uri string) (*ParsedURI, error) {
 	}
 
 	// Detect address type
-	if strings.Contains(authority, "@") {
+	switch {
+	case strings.Contains(authority, "@"):
 		// Paymail: alias@domain
 		parts := strings.SplitN(authority, "@", 2)
 		if parts[0] == "" || parts[1] == "" {
@@ -99,15 +100,15 @@ func ParseURI(uri string) (*ParsedURI, error) {
 		result.Type = AddressPaymail
 		result.Alias = parts[0]
 		result.Domain = parts[1]
-	} else if isPubKeyHex(authority) {
+	case isPubKeyHex(authority):
 		// PubKey: 02/03 + 64 hex chars = 66 hex chars total
 		pubKeyBytes, err := hex.DecodeString(authority)
 		if err != nil {
-			return nil, fmt.Errorf("%w: invalid public key hex: %v", ErrInvalidURI, err)
+			return nil, fmt.Errorf("%w: invalid public key hex: %w", ErrInvalidURI, err)
 		}
 		result.Type = AddressPubKey
 		result.PubKey = pubKeyBytes
-	} else {
+	default:
 		// DNSLink: plain domain
 		result.Type = AddressDNSLink
 		result.Domain = authority

@@ -126,7 +126,7 @@ func TestParseOPReturnData_WrongMetaFlag(t *testing.T) {
 func TestParseOPReturnData_InvalidPNodeLength(t *testing.T) {
 	pushes := [][]byte{
 		MetaFlagBytes,
-		[]byte{0x02, 0x03}, // too short
+		{0x02, 0x03}, // too short
 		bytes.Repeat([]byte{0x03}, 32),
 		[]byte("payload"),
 	}
@@ -168,10 +168,10 @@ func TestOPReturn_RoundTrip(t *testing.T) {
 
 func TestEstimateFee(t *testing.T) {
 	tests := []struct {
-		name    string
-		size    int
-		rate    uint64
-		minFee  uint64
+		name   string
+		size   int
+		rate   uint64
+		minFee uint64
 	}{
 		{"minimal tx", 200, 1, 1},
 		{"1KB tx at 1 sat/KB", 1000, 1, 1},
@@ -722,7 +722,7 @@ func TestParseOPReturnData_InvalidParentTxIDLength(t *testing.T) {
 	pushes := [][]byte{
 		MetaFlagBytes,
 		bytes.Repeat([]byte{0x02}, CompressedPubKeyLen), // valid P_node length
-		[]byte{0x01, 0x02, 0x03},                        // 3 bytes -- not 0 and not 32
+		{0x01, 0x02, 0x03}, // 3 bytes -- not 0 and not 32
 		[]byte("payload"),
 	}
 	_, _, _, err := ParseOPReturnData(pushes)
@@ -756,4 +756,146 @@ func TestEstimateTxSize_ZeroInputsOutputs(t *testing.T) {
 	size := EstimateTxSize(0, 0, 0)
 	// Should still return base + opReturn overhead, never negative
 	assert.Greater(t, size, 0, "degenerate tx size should still be positive")
+}
+
+// =============================================================================
+// Benchmarks
+// =============================================================================
+
+func BenchmarkBuildOPReturnData(b *testing.B) {
+	privKey, _ := ec.NewPrivateKey()
+	pubKey := privKey.PubKey()
+	parentTxID := bytes.Repeat([]byte{0xab}, 32)
+	payload := bytes.Repeat([]byte("payload-data"), 100)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := BuildOPReturnData(pubKey, parentTxID, payload)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseOPReturnData(b *testing.B) {
+	privKey, _ := ec.NewPrivateKey()
+	pubKey := privKey.PubKey()
+	parentTxID := bytes.Repeat([]byte{0xab}, 32)
+	payload := bytes.Repeat([]byte("payload-data"), 100)
+
+	pushes, err := BuildOPReturnData(pubKey, parentTxID, payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _, err := ParseOPReturnData(pushes)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBuildParseOPReturnRoundTrip(b *testing.B) {
+	privKey, _ := ec.NewPrivateKey()
+	pubKey := privKey.PubKey()
+	parentTxID := bytes.Repeat([]byte{0xab}, 32)
+	payload := bytes.Repeat([]byte("payload-data"), 100)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		pushes, err := BuildOPReturnData(pubKey, parentTxID, payload)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _, _, err = ParseOPReturnData(pushes)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBuildCreateRoot(b *testing.B) {
+	privKey, _ := ec.NewPrivateKey()
+	pubKey := privKey.PubKey()
+	payload := bytes.Repeat([]byte("root-payload"), 50)
+	feeUTXO := &UTXO{
+		TxID:   bytes.Repeat([]byte{0x01}, 32),
+		Vout:   0,
+		Amount: 100000,
+	}
+
+	params := &CreateRootParams{
+		NodePubKey: pubKey,
+		Payload:    payload,
+		FeeUTXO:    feeUTXO,
+		FeeRate:    1,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := BuildCreateRoot(params)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBuildCreateChild(b *testing.B) {
+	privKey, _ := ec.NewPrivateKey()
+	nodePub := privKey.PubKey()
+	parentPriv, _ := ec.NewPrivateKey()
+	parentPub := parentPriv.PubKey()
+	parentTxID := bytes.Repeat([]byte{0xaa}, 32)
+	payload := bytes.Repeat([]byte("child-payload"), 50)
+
+	params := &CreateChildParams{
+		NodePubKey:    nodePub,
+		ParentTxID:    parentTxID,
+		Payload:       payload,
+		ParentUTXO:    &UTXO{TxID: parentTxID, Vout: 1, Amount: DustLimit, PrivateKey: parentPriv},
+		ParentPrivKey: parentPriv,
+		FeeUTXO: &UTXO{
+			TxID:   bytes.Repeat([]byte{0x01}, 32),
+			Vout:   0,
+			Amount: 100000,
+		},
+		ParentPubKey: parentPub,
+		FeeRate:      1,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := BuildCreateChild(params)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEstimateFee(b *testing.B) {
+	b.Run("small_tx", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			EstimateFee(300, 1)
+		}
+	})
+	b.Run("large_tx", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			EstimateFee(100000, 10)
+		}
+	})
+}
+
+func BenchmarkEstimateTxSize(b *testing.B) {
+	b.Run("root_tx", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			EstimateTxSize(1, 3, 200)
+		}
+	})
+	b.Run("child_tx", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			EstimateTxSize(2, 4, 500)
+		}
+	})
 }

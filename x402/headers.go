@@ -55,7 +55,7 @@ func ParsePaymentHeaders(resp *http.Response) (*PaymentHeaders, error) {
 
 	price, err := strconv.ParseUint(priceStr, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid %s value: %v", ErrMissingHeaders, HeaderPrice, err)
+		return nil, fmt.Errorf("%w: invalid %s value: %w", ErrMissingHeaders, HeaderPrice, err)
 	}
 
 	pricePerKBStr := resp.Header.Get(HeaderPricePerKB)
@@ -65,7 +65,7 @@ func ParsePaymentHeaders(resp *http.Response) (*PaymentHeaders, error) {
 
 	pricePerKB, err := strconv.ParseUint(pricePerKBStr, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid %s value: %v", ErrMissingHeaders, HeaderPricePerKB, err)
+		return nil, fmt.Errorf("%w: invalid %s value: %w", ErrMissingHeaders, HeaderPricePerKB, err)
 	}
 
 	fileSizeStr := resp.Header.Get(HeaderFileSize)
@@ -75,7 +75,7 @@ func ParsePaymentHeaders(resp *http.Response) (*PaymentHeaders, error) {
 
 	fileSize, err := strconv.ParseUint(fileSizeStr, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid %s value: %v", ErrMissingHeaders, HeaderFileSize, err)
+		return nil, fmt.Errorf("%w: invalid %s value: %w", ErrMissingHeaders, HeaderFileSize, err)
 	}
 
 	invoiceID := resp.Header.Get(HeaderInvoiceID)
@@ -90,7 +90,7 @@ func ParsePaymentHeaders(resp *http.Response) (*PaymentHeaders, error) {
 
 	expiry, err := strconv.ParseInt(expiryStr, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid %s value: %v", ErrMissingHeaders, HeaderExpiry, err)
+		return nil, fmt.Errorf("%w: invalid %s value: %w", ErrMissingHeaders, HeaderExpiry, err)
 	}
 
 	return &PaymentHeaders{

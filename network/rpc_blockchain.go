@@ -1,11 +1,15 @@
 package network
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+
+	"github.com/tongxiaofeng/libbitfs-go/spv"
 )
 
 // Compile-time interface check.
@@ -17,20 +21,223 @@ func btcToSat(btc float64) uint64 {
 	return uint64(math.Round(btc * 1e8))
 }
 
-// parseCMerkleBlock performs minimal validation of a CMerkleBlock binary blob.
-// Full parsing (extracting branches, matching partial Merkle tree) is deferred
-// to the SPVClient layer. For now, we only validate minimum length (80-byte
-// block header + 4-byte numTransactions) and return a stub MerkleProof.
+// parseCMerkleBlock parses a BIP37 CMerkleBlock and returns a MerkleProof.
+// The txid parameter is the display-hex transaction ID (big-endian byte order).
 func parseCMerkleBlock(txid string, data []byte) (*MerkleProof, error) {
-	if len(data) < 84 {
-		return nil, fmt.Errorf("%w: CMerkleBlock too short (%d bytes)", ErrInvalidResponse, len(data))
+	txidBytes, err := hex.DecodeString(txid)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid txid hex: %v", ErrInvalidResponse, err)
 	}
+	if len(txidBytes) != 32 {
+		return nil, fmt.Errorf("%w: txid must be 32 bytes, got %d", ErrInvalidResponse, len(txidBytes))
+	}
+
+	// Convert display txid (big-endian) to internal byte order for tree matching.
+	targetTxID := reverseBytesCopy(txidBytes)
+
+	headerBytes, txIndex, branches, _, err := ParseBIP37MerkleBlock(data, targetTxID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
+	}
+
+	// Compute block hash in display hex (reversed double-SHA256 of header).
+	blockHash := spv.DoubleHash(headerBytes)
+	blockHashHex := hex.EncodeToString(reverseBytesCopy(blockHash))
+
 	return &MerkleProof{
 		TxID:      txid,
-		BlockHash: "",
-		Branches:  nil,
-		Index:     0,
+		BlockHash: blockHashHex,
+		Branches:  branches,
+		Index:     int(txIndex),
 	}, nil
+}
+
+// ParseBIP37MerkleBlock parses a BIP37-encoded CMerkleBlock and extracts
+// the Merkle branch for a target transaction.
+//
+// Parameters:
+//   - data: raw BIP37 CMerkleBlock bytes
+//   - targetTxID: transaction hash in internal byte order (raw double-SHA256)
+//
+// Returns:
+//   - header: raw 80-byte block header
+//   - txIndex: position of the target tx in the block
+//   - branches: Merkle branch hashes (internal byte order, bottom-up)
+//   - totalTxs: total transactions in the block
+func ParseBIP37MerkleBlock(data []byte, targetTxID []byte) (header []byte, txIndex uint32, branches [][]byte, totalTxs uint32, err error) {
+	if len(data) < 84 {
+		return nil, 0, nil, 0, fmt.Errorf("CMerkleBlock too short: %d bytes", len(data))
+	}
+
+	header = data[:80]
+	totalTxs = binary.LittleEndian.Uint32(data[80:84])
+	pos := 84
+
+	// Read varint: number of hashes.
+	numHashes, bytesRead := readVarInt(data[pos:])
+	if bytesRead == 0 {
+		return nil, 0, nil, 0, fmt.Errorf("failed to read hash count varint")
+	}
+	pos += bytesRead
+
+	// Read the hashes.
+	hashes := make([][]byte, numHashes)
+	for i := uint64(0); i < numHashes; i++ {
+		if pos+32 > len(data) {
+			return nil, 0, nil, 0, fmt.Errorf("unexpected end of data reading hash %d", i)
+		}
+		h := make([]byte, 32)
+		copy(h, data[pos:pos+32])
+		hashes[i] = h
+		pos += 32
+	}
+
+	// Read varint: number of flag bytes.
+	numFlagBytes, bytesRead := readVarInt(data[pos:])
+	if bytesRead == 0 {
+		return nil, 0, nil, 0, fmt.Errorf("failed to read flag bytes count varint")
+	}
+	pos += bytesRead
+
+	if uint64(pos)+numFlagBytes > uint64(len(data)) {
+		return nil, 0, nil, 0, fmt.Errorf("unexpected end of data reading flags")
+	}
+	flagBytes := data[pos : pos+int(numFlagBytes)]
+
+	txIndex, branches, err = traversePartialMerkleTree(hashes, flagBytes, totalTxs, targetTxID)
+	if err != nil {
+		return nil, 0, nil, 0, fmt.Errorf("traverse partial merkle tree: %w", err)
+	}
+
+	return header, txIndex, branches, totalTxs, nil
+}
+
+// traversePartialMerkleTree walks the BIP37 partial Merkle tree structure and
+// extracts the branch nodes needed for a standard Merkle proof of the target tx.
+func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint32, targetTxID []byte) (txIndex uint32, branch [][]byte, err error) {
+	height := uint32(0)
+	for calcTreeWidth(totalTxs, height) > 1 {
+		height++
+	}
+
+	hashIdx := 0
+	bitIdx := 0
+
+	getBit := func() bool {
+		if bitIdx/8 >= len(flagBytes) {
+			return false
+		}
+		bit := (flagBytes[bitIdx/8] >> uint(bitIdx%8)) & 1
+		bitIdx++
+		return bit == 1
+	}
+
+	getHash := func() []byte {
+		if hashIdx >= len(hashes) {
+			return nil
+		}
+		h := hashes[hashIdx]
+		hashIdx++
+		return h
+	}
+
+	type traverseResult struct {
+		hash   []byte
+		found  bool
+		index  uint32
+		branch [][]byte
+	}
+
+	var traverse func(depth, pos uint32) traverseResult
+	traverse = func(depth, pos uint32) traverseResult {
+		flag := getBit()
+
+		if depth == 0 {
+			h := getHash()
+			isTarget := bytes.Equal(h, targetTxID)
+			return traverseResult{hash: h, found: isTarget, index: pos}
+		}
+
+		if !flag {
+			h := getHash()
+			return traverseResult{hash: h}
+		}
+
+		left := traverse(depth-1, pos*2)
+		var right traverseResult
+		if pos*2+1 < calcTreeWidth(totalTxs, depth-1) {
+			right = traverse(depth-1, pos*2+1)
+		} else {
+			right = traverseResult{hash: left.hash}
+		}
+
+		combined := make([]byte, 64)
+		copy(combined[:32], left.hash)
+		copy(combined[32:], right.hash)
+		parentHash := spv.DoubleHash(combined)
+
+		result := traverseResult{hash: parentHash}
+		if left.found {
+			result.found = true
+			result.index = left.index
+			result.branch = append(left.branch, right.hash)
+		} else if right.found {
+			result.found = true
+			result.index = right.index
+			result.branch = append(right.branch, left.hash)
+		}
+
+		return result
+	}
+
+	result := traverse(height, 0)
+	if !result.found {
+		return 0, nil, fmt.Errorf("target tx not found in partial merkle tree")
+	}
+
+	return result.index, result.branch, nil
+}
+
+// calcTreeWidth computes the number of nodes at a given depth in a Merkle tree.
+func calcTreeWidth(totalLeaves, depth uint32) uint32 {
+	return (totalLeaves + (1 << depth) - 1) >> depth
+}
+
+// readVarInt reads a Bitcoin-style variable-length integer from data.
+// Returns the value and the number of bytes consumed.
+func readVarInt(data []byte) (uint64, int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	first := data[0]
+	switch {
+	case first < 0xFD:
+		return uint64(first), 1
+	case first == 0xFD:
+		if len(data) < 3 {
+			return 0, 0
+		}
+		return uint64(binary.LittleEndian.Uint16(data[1:3])), 3
+	case first == 0xFE:
+		if len(data) < 5 {
+			return 0, 0
+		}
+		return uint64(binary.LittleEndian.Uint32(data[1:5])), 5
+	default: // 0xFF
+		if len(data) < 9 {
+			return 0, 0
+		}
+		return binary.LittleEndian.Uint64(data[1:9]), 9
+	}
+}
+
+// reverseBytesCopy returns a reversed copy of a byte slice.
+func reverseBytesCopy(b []byte) []byte {
+	c := make([]byte, len(b))
+	for i, v := range b {
+		c[len(b)-1-i] = v
+	}
+	return c
 }
 
 // listUnspentResult maps the JSON fields returned by the Bitcoin RPC listunspent call.
@@ -182,6 +389,20 @@ func (c *RPCClient) GetMerkleProof(ctx context.Context, txid string) (*MerklePro
 		return nil, fmt.Errorf("%w: invalid proof hex: %v", ErrInvalidResponse, err)
 	}
 	return parseCMerkleBlock(txid, data)
+}
+
+// ImportAddress imports a watch-only address into the node's wallet so that
+// ListUnspent can find its UTXOs. Calls `importaddress "address" "" true`.
+// The rescan parameter is true so the node discovers any existing outputs.
+// Safe to call multiple times; the node returns success if already imported.
+func (c *RPCClient) ImportAddress(ctx context.Context, address string) error {
+	// params: address, label (empty), rescan (true)
+	params := []interface{}{address, "", true}
+	var result interface{}
+	if err := c.Call(ctx, "importaddress", params, &result); err != nil {
+		return fmt.Errorf("importaddress: %w", err)
+	}
+	return nil
 }
 
 // GetBestBlockHeight returns the height of the current chain tip.

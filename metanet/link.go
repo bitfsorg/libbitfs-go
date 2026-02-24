@@ -40,7 +40,7 @@ func FollowLink(store NodeStore, linkNode *Node, maxDepth int) (*Node, error) {
 
 		target, err := store.GetNodeByPubKey(current.LinkTarget)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
+			return nil, fmt.Errorf("%w: %w", ErrNodeNotFound, err)
 		}
 		if target == nil {
 			return nil, fmt.Errorf("%w: link target not found", ErrNodeNotFound)
@@ -143,7 +143,7 @@ func InheritPricePerKB(store NodeStore, node *Node) (uint64, error) {
 
 		parent, err := store.GetNodeByPubKey(current.Parent)
 		if err != nil {
-			return 0, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
+			return 0, fmt.Errorf("%w: %w", ErrNodeNotFound, err)
 		}
 		if parent == nil {
 			return 0, nil

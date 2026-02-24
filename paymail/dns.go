@@ -56,7 +56,7 @@ func ResolveEndpointsWithResolver(domain string, recordType string, resolver DNS
 
 	_, addrs, err := resolver.LookupSRV(recordType, "tcp", domain)
 	if err != nil {
-		return nil, fmt.Errorf("%w: SRV lookup for _%s._tcp.%s: %v", ErrDNSLookupFailed, recordType, domain, err)
+		return nil, fmt.Errorf("%w: SRV lookup for _%s._tcp.%s: %w", ErrDNSLookupFailed, recordType, domain, err)
 	}
 
 	if len(addrs) == 0 {
@@ -95,7 +95,7 @@ func ResolveDNSLinkPubKeyWithResolver(domain string, resolver DNSResolver) ([]by
 	name := "_bitfs_pubkey." + domain
 	txts, err := resolver.LookupTXT(name)
 	if err != nil {
-		return nil, fmt.Errorf("%w: TXT lookup for %s: %v", ErrDNSLookupFailed, name, err)
+		return nil, fmt.Errorf("%w: TXT lookup for %s: %w", ErrDNSLookupFailed, name, err)
 	}
 
 	if len(txts) == 0 {
@@ -118,7 +118,7 @@ func ResolveDNSLinkPubKeyWithResolver(domain string, resolver DNSResolver) ([]by
 
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid hex in TXT record: %v", ErrInvalidPubKey, err)
+		return nil, fmt.Errorf("%w: invalid hex in TXT record: %w", ErrInvalidPubKey, err)
 	}
 
 	if err := validateCompressedPubKey(pubKeyBytes); err != nil {

@@ -87,7 +87,7 @@ func ResolvePath(store NodeStore, root *Node, pathComponents []string) (*Resolve
 		// Resolve child node
 		childNode, err := store.GetNodeByPubKey(entry.PubKey)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
+			return nil, fmt.Errorf("%w: %w", ErrNodeNotFound, err)
 		}
 		if childNode == nil {
 			return nil, fmt.Errorf("%w: child %q", ErrNodeNotFound, component)

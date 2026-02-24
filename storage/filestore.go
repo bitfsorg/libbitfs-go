@@ -25,7 +25,7 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 
 	// Create base directory if it does not exist
 	if err := os.MkdirAll(baseDir, 0700); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return nil, fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	return &FileStore{
@@ -76,12 +76,12 @@ func (fs *FileStore) Put(keyHash []byte, ciphertext []byte) error {
 	// Ensure shard directory exists
 	shard := fs.shardDir(keyHash)
 	if err := os.MkdirAll(shard, 0700); err != nil {
-		return fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	path := fs.filePath(keyHash)
 	if err := os.WriteFile(path, ciphertext, 0600); err != nil {
-		return fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	return nil
@@ -102,7 +102,7 @@ func (fs *FileStore) Get(keyHash []byte) ([]byte, error) {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return nil, fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	return data, nil
@@ -123,7 +123,7 @@ func (fs *FileStore) Has(keyHash []byte) (bool, error) {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return false, fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	return true, nil
@@ -144,7 +144,7 @@ func (fs *FileStore) Delete(keyHash []byte) error {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	return nil
@@ -165,7 +165,7 @@ func (fs *FileStore) Size(keyHash []byte) (int64, error) {
 		if os.IsNotExist(err) {
 			return 0, ErrNotFound
 		}
-		return 0, fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return 0, fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	return info.Size(), nil
@@ -181,7 +181,7 @@ func (fs *FileStore) List() ([][]byte, error) {
 	// Read shard directories
 	entries, err := os.ReadDir(fs.baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrIOFailure, err)
+		return nil, fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 
 	for _, entry := range entries {

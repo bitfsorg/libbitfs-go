@@ -1,15 +1,19 @@
 package network
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tongxiaofeng/libbitfs-go/spv"
 )
 
 // rpcTestServer creates a mock JSON-RPC server for testing RPCClient methods.
@@ -202,30 +206,258 @@ func TestGetBlockHeader(t *testing.T) {
 	assert.Len(t, header, 80)
 }
 
+// buildTestBIP37 constructs a BIP37-encoded CMerkleBlock for testing.
+// It takes tx hashes (internal byte order), builds the Merkle tree, and encodes
+// a partial Merkle tree for the matched tx at matchedIndex.
+func buildTestBIP37(t *testing.T, txHashes [][]byte, matchedIndex int) (merkleBlock []byte, merkleRoot []byte) {
+	t.Helper()
+	totalTxs := uint32(len(txHashes))
+
+	// Calculate tree height.
+	treeHeight := 0
+	for calcTreeWidth(totalTxs, uint32(treeHeight)) > 1 {
+		treeHeight++
+	}
+
+	type nodeInfo struct {
+		hash    []byte
+		matched bool
+	}
+
+	// Build all levels: levels[0]=leaves, levels[treeHeight]=root.
+	levels := make([][]nodeInfo, treeHeight+1)
+	levels[0] = make([]nodeInfo, len(txHashes))
+	for i, h := range txHashes {
+		levels[0][i] = nodeInfo{hash: h, matched: i == matchedIndex}
+	}
+	for l := 1; l <= treeHeight; l++ {
+		width := int(calcTreeWidth(totalTxs, uint32(l)))
+		childWidth := int(calcTreeWidth(totalTxs, uint32(l-1)))
+		levels[l] = make([]nodeInfo, width)
+		for p := 0; p < width; p++ {
+			left := levels[l-1][p*2]
+			var right nodeInfo
+			if p*2+1 < childWidth {
+				right = levels[l-1][p*2+1]
+			} else {
+				right = left // duplicate last for odd count
+			}
+			combined := make([]byte, 64)
+			copy(combined[:32], left.hash)
+			copy(combined[32:], right.hash)
+			levels[l][p] = nodeInfo{
+				hash:    spv.DoubleHash(combined),
+				matched: left.matched || right.matched,
+			}
+		}
+	}
+
+	merkleRoot = levels[treeHeight][0].hash
+
+	// Build block header with this Merkle root.
+	headerBytes := make([]byte, 80)
+	headerBytes[0] = 0x01
+	copy(headerBytes[36:68], merkleRoot)
+
+	// BIP37 encode: depth-first traversal from root.
+	// level=0 is leaves, level=treeHeight is root.
+	var hashes [][]byte
+	var flagBits []bool
+
+	var encode func(level, pos int)
+	encode = func(level, pos int) {
+		node := levels[level][pos]
+
+		if level == 0 {
+			flagBits = append(flagBits, node.matched)
+			hashes = append(hashes, node.hash)
+			return
+		}
+
+		if !node.matched {
+			flagBits = append(flagBits, false)
+			hashes = append(hashes, node.hash)
+			return
+		}
+
+		// Ancestor of match: descend.
+		flagBits = append(flagBits, true)
+		encode(level-1, pos*2)
+		childWidth := int(calcTreeWidth(totalTxs, uint32(level-1)))
+		if pos*2+1 < childWidth {
+			encode(level-1, pos*2+1)
+		}
+	}
+	encode(treeHeight, 0)
+
+	// Pack flag bits into bytes.
+	numFlagBytes := (len(flagBits) + 7) / 8
+	flagByteSlice := make([]byte, numFlagBytes)
+	for i, bit := range flagBits {
+		if bit {
+			flagByteSlice[i/8] |= 1 << uint(i%8)
+		}
+	}
+
+	// Assemble the CMerkleBlock.
+	var buf bytes.Buffer
+	buf.Write(headerBytes)
+	binary.Write(&buf, binary.LittleEndian, totalTxs)
+	buf.WriteByte(byte(len(hashes)))
+	for _, h := range hashes {
+		buf.Write(h)
+	}
+	buf.WriteByte(byte(numFlagBytes))
+	buf.Write(flagByteSlice)
+
+	return buf.Bytes(), merkleRoot
+}
+
 func TestGetMerkleProof(t *testing.T) {
-	// gettxoutproof returns a hex-encoded CMerkleBlock.
-	// We need at least 84 bytes (168 hex chars). Build a minimal valid one:
-	// 80 bytes block header + 4 bytes numTransactions.
-	headerBytes := make([]byte, 84)
-	headerBytes[0] = 0x01 // version
-	proofHex := hex.EncodeToString(headerBytes)
+	// Create a single-tx block.
+	tx0 := spv.DoubleHash([]byte("test coinbase tx"))
+	merkleBlock, _ := buildTestBIP37(t, [][]byte{tx0}, 0)
+	proofHex := hex.EncodeToString(merkleBlock)
+	txidDisplay := hex.EncodeToString(reverseBytesCopy(tx0))
 
 	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
 		"gettxoutproof": func(params []interface{}) (interface{}, *rpcError) {
 			require.Len(t, params, 1)
 			txids, ok := params[0].([]interface{})
 			require.True(t, ok)
-			assert.Equal(t, "txid_proof", txids[0])
+			assert.Equal(t, txidDisplay, txids[0])
 			return proofHex, nil
 		},
 	})
 	defer server.Close()
 
 	client := NewRPCClient(RPCConfig{URL: server.URL})
-	proof, err := client.GetMerkleProof(context.Background(), "txid_proof")
+	proof, err := client.GetMerkleProof(context.Background(), txidDisplay)
 	require.NoError(t, err)
 	require.NotNil(t, proof)
-	assert.Equal(t, "txid_proof", proof.TxID)
+	assert.Equal(t, txidDisplay, proof.TxID)
+	assert.Equal(t, 0, proof.Index)
+	assert.Empty(t, proof.Branches)
+}
+
+func TestParseBIP37MerkleBlock_SingleTx(t *testing.T) {
+	tx0 := spv.DoubleHash([]byte("single tx"))
+	merkleBlock, merkleRoot := buildTestBIP37(t, [][]byte{tx0}, 0)
+
+	header, txIndex, branches, totalTxs, err := ParseBIP37MerkleBlock(merkleBlock, tx0)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), txIndex)
+	assert.Empty(t, branches)
+	assert.Equal(t, uint32(1), totalTxs)
+	assert.Len(t, header, 80)
+
+	// Verify merkle root in header matches.
+	parsedMerkleRoot := header[36:68]
+	assert.Equal(t, merkleRoot, parsedMerkleRoot)
+}
+
+func TestParseBIP37MerkleBlock_TwoTxs(t *testing.T) {
+	tx0 := spv.DoubleHash([]byte("coinbase"))
+	tx1 := spv.DoubleHash([]byte("our target"))
+
+	merkleBlock, merkleRoot := buildTestBIP37(t, [][]byte{tx0, tx1}, 1)
+
+	header, txIndex, branches, totalTxs, err := ParseBIP37MerkleBlock(merkleBlock, tx1)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(1), txIndex)
+	assert.Equal(t, uint32(2), totalTxs)
+	require.Len(t, branches, 1)
+	assert.Equal(t, tx0, branches[0], "branch should be the sibling tx hash")
+
+	// Verify the proof produces the correct Merkle root.
+	computedRoot := spv.ComputeMerkleRoot(tx1, txIndex, branches)
+	assert.Equal(t, merkleRoot, computedRoot)
+
+	// Verify merkle root in header.
+	assert.Equal(t, merkleRoot, header[36:68])
+}
+
+func TestParseBIP37MerkleBlock_FourTxs(t *testing.T) {
+	txHashes := make([][]byte, 4)
+	for i := range txHashes {
+		txHashes[i] = spv.DoubleHash([]byte(fmt.Sprintf("tx-%d", i)))
+	}
+
+	// Test matching each tx in the block.
+	for targetIdx := 0; targetIdx < 4; targetIdx++ {
+		t.Run(fmt.Sprintf("target_index_%d", targetIdx), func(t *testing.T) {
+			merkleBlock, merkleRoot := buildTestBIP37(t, txHashes, targetIdx)
+
+			_, txIndex, branches, totalTxs, err := ParseBIP37MerkleBlock(merkleBlock, txHashes[targetIdx])
+			require.NoError(t, err)
+			assert.Equal(t, uint32(targetIdx), txIndex)
+			assert.Equal(t, uint32(4), totalTxs)
+			require.Len(t, branches, 2, "4-tx tree needs 2 branch nodes")
+
+			computedRoot := spv.ComputeMerkleRoot(txHashes[targetIdx], txIndex, branches)
+			assert.Equal(t, merkleRoot, computedRoot)
+		})
+	}
+}
+
+func TestParseBIP37MerkleBlock_OddTxCount(t *testing.T) {
+	// 3 txs: tree pads the last tx.
+	txHashes := make([][]byte, 3)
+	for i := range txHashes {
+		txHashes[i] = spv.DoubleHash([]byte(fmt.Sprintf("odd-tx-%d", i)))
+	}
+
+	merkleBlock, merkleRoot := buildTestBIP37(t, txHashes, 2)
+
+	_, txIndex, branches, totalTxs, err := ParseBIP37MerkleBlock(merkleBlock, txHashes[2])
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), txIndex)
+	assert.Equal(t, uint32(3), totalTxs)
+	require.NotEmpty(t, branches)
+
+	computedRoot := spv.ComputeMerkleRoot(txHashes[2], txIndex, branches)
+	assert.Equal(t, merkleRoot, computedRoot)
+}
+
+func TestParseBIP37MerkleBlock_TxNotFound(t *testing.T) {
+	tx0 := spv.DoubleHash([]byte("known tx"))
+	merkleBlock, _ := buildTestBIP37(t, [][]byte{tx0}, 0)
+
+	unknownTx := spv.DoubleHash([]byte("unknown tx"))
+	_, _, _, _, err := ParseBIP37MerkleBlock(merkleBlock, unknownTx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target tx not found")
+}
+
+func TestParseBIP37MerkleBlock_TooShort(t *testing.T) {
+	_, _, _, _, err := ParseBIP37MerkleBlock(make([]byte, 83), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too short")
+}
+
+func TestParseCMerkleBlock_DisplayHexConversion(t *testing.T) {
+	// Verify that parseCMerkleBlock correctly converts display hex txid
+	// and produces a MerkleProof with display hex block hash.
+	tx0 := spv.DoubleHash([]byte("coinbase"))
+	tx1 := spv.DoubleHash([]byte("target"))
+
+	merkleBlock, merkleRoot := buildTestBIP37(t, [][]byte{tx0, tx1}, 1)
+	txidDisplay := hex.EncodeToString(reverseBytesCopy(tx1))
+
+	proof, err := parseCMerkleBlock(txidDisplay, merkleBlock)
+	require.NoError(t, err)
+	assert.Equal(t, txidDisplay, proof.TxID)
+	assert.Equal(t, 1, proof.Index)
+	require.Len(t, proof.Branches, 1)
+
+	// Verify block hash is display hex (reversed hash of header).
+	expectedBlockHash := spv.DoubleHash(merkleBlock[:80])
+	expectedBlockHashHex := hex.EncodeToString(reverseBytesCopy(expectedBlockHash))
+	assert.Equal(t, expectedBlockHashHex, proof.BlockHash)
+
+	// Verify the branches produce the correct merkle root.
+	computedRoot := spv.ComputeMerkleRoot(tx1, uint32(proof.Index), proof.Branches)
+	assert.Equal(t, merkleRoot, computedRoot)
 }
 
 func TestGetBestBlockHeight(t *testing.T) {

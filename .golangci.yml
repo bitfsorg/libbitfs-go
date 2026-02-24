@@ -1,0 +1,73 @@
+version: "2"
+
+run:
+  go: "1.25"
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - gocritic
+    - revive
+    - misspell
+    - unconvert
+    - unparam
+    - errorlint
+    - nilerr
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+    misspell:
+      locale: US
+    unparam:
+      check-exported: false
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+    rules:
+      # Test files: relax some rules
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+          - gocritic
+      # Allow unused-parameter in interface implementations
+      - linters:
+          - revive
+        text: "unused-parameter"
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5

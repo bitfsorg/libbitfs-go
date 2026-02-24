@@ -12,7 +12,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// BuildHTLC — script opcode branches (66% → higher)
+// BuildHTLC — script opcode branches (66% -> higher)
 // ---------------------------------------------------------------------------
 
 func TestBuildHTLC_ValidScript_Length(t *testing.T) {
@@ -62,53 +62,11 @@ func TestBuildHTLC_ScriptContainsOpcodes(t *testing.T) {
 	assert.True(t, opcodes[script.OpENDIF])
 	assert.True(t, opcodes[script.OpSHA256])
 	assert.True(t, opcodes[script.OpCHECKSIG])
-	assert.True(t, opcodes[script.OpCHECKLOCKTIMEVERIFY])
+	assert.True(t, opcodes[script.OpCHECKMULTISIG])
 }
 
 // ---------------------------------------------------------------------------
-// encodeScriptNum — edge cases (93.8% → 100%)
-// ---------------------------------------------------------------------------
-
-func TestEncodeScriptNum_Zero(t *testing.T) {
-	result := encodeScriptNum(0)
-	assert.Empty(t, result)
-}
-
-func TestEncodeScriptNum_Negative(t *testing.T) {
-	result := encodeScriptNum(-1)
-	assert.NotEmpty(t, result)
-	assert.Equal(t, byte(0x81), result[0])
-}
-
-func TestEncodeScriptNum_NegativeLarger(t *testing.T) {
-	result := encodeScriptNum(-256)
-	assert.NotEmpty(t, result)
-	assert.True(t, result[len(result)-1]&0x80 != 0)
-}
-
-func TestEncodeScriptNum_HighBitSet(t *testing.T) {
-	// 128 (0x80) has high bit set, needs extra byte.
-	result := encodeScriptNum(128)
-	assert.Len(t, result, 2)
-	assert.Equal(t, byte(0x80), result[0])
-	assert.Equal(t, byte(0x00), result[1])
-}
-
-func TestEncodeScriptNum_NegativeHighBit(t *testing.T) {
-	result := encodeScriptNum(-128)
-	assert.Len(t, result, 2)
-	assert.Equal(t, byte(0x80), result[0])
-	assert.Equal(t, byte(0x80), result[1])
-}
-
-func TestEncodeScriptNum_SmallPositive(t *testing.T) {
-	result := encodeScriptNum(127)
-	assert.Len(t, result, 1)
-	assert.Equal(t, byte(0x7f), result[0])
-}
-
-// ---------------------------------------------------------------------------
-// generateInvoiceID — coverage of normal path (75% → higher)
+// generateInvoiceID — coverage of normal path (75% -> higher)
 // ---------------------------------------------------------------------------
 
 func TestGenerateInvoiceID_Uniqueness(t *testing.T) {
@@ -122,7 +80,7 @@ func TestGenerateInvoiceID_Uniqueness(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ParseHTLCPreimage — edge cases (81% → higher)
+// ParseHTLCPreimage — edge cases (81% -> higher)
 // ---------------------------------------------------------------------------
 
 func TestParseHTLCPreimage_NoHTLCSpend(t *testing.T) {
@@ -204,7 +162,7 @@ func TestParseHTLCPreimage_MultipleInputsSecondMatches(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// VerifyPayment — edge cases (90.5% → higher)
+// VerifyPayment — edge cases (90.5% -> higher)
 // ---------------------------------------------------------------------------
 
 func TestVerifyPayment_NonP2PKHOutputs(t *testing.T) {
@@ -271,11 +229,17 @@ func makeHTLCParams() *HTLCParams {
 	for i := 1; i < 33; i++ {
 		buyerPub[i] = byte(i)
 	}
+	sellerPub := make([]byte, CompressedPubKeyLen)
+	sellerPub[0] = 0x03
+	for i := 1; i < 33; i++ {
+		sellerPub[i] = byte(i + 50)
+	}
 	return &HTLCParams{
-		BuyerPubKey: buyerPub,
-		SellerAddr:  make([]byte, PubKeyHashLen),
-		CapsuleHash: make([]byte, CapsuleHashLen),
-		Amount:      10000,
-		Timeout:     DefaultHTLCTimeout,
+		BuyerPubKey:  buyerPub,
+		SellerPubKey: sellerPub,
+		SellerAddr:   make([]byte, PubKeyHashLen),
+		CapsuleHash:  make([]byte, CapsuleHashLen),
+		Amount:       10000,
+		Timeout:      DefaultHTLCTimeout,
 	}
 }

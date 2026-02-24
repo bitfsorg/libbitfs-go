@@ -25,12 +25,12 @@ func ValidateConfig(cfg Config) error {
 		return ErrEmptyDataDir
 	}
 
-	if cfg.Network != "mainnet" && cfg.Network != "testnet" {
+	if cfg.Network != "mainnet" && cfg.Network != "testnet" && cfg.Network != "teratestnet" && cfg.Network != "regtest" {
 		return ErrInvalidNetwork
 	}
 
 	if err := validateAddr(cfg.ListenAddr); err != nil {
-		return fmt.Errorf("%w: %s", ErrInvalidListenAddr, err)
+		return fmt.Errorf("%w: %w", ErrInvalidListenAddr, err)
 	}
 
 	if !validLogLevels[strings.ToLower(cfg.LogLevel)] {

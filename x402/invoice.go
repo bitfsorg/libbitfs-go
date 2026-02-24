@@ -15,13 +15,13 @@ import (
 // Invoice represents a payment request for content access.
 type Invoice struct {
 	ID          string `json:"id"`
-	Price       uint64 `json:"price"`         // Total price in satoshis
-	PricePerKB  uint64 `json:"price_per_kb"`  // Unit price
-	FileSize    uint64 `json:"file_size"`     // Content size in bytes
-	PaymentAddr string `json:"payment_addr"`  // BSV address for payment
-	Expiry      int64  `json:"expiry"`        // Unix timestamp
-	KeyHash     []byte `json:"key_hash"`      // Content key hash
-	CapsuleHash []byte `json:"capsule_hash"`  // SHA256(ECDH capsule) for HTLC
+	Price       uint64 `json:"price"`        // Total price in satoshis
+	PricePerKB  uint64 `json:"price_per_kb"` // Unit price
+	FileSize    uint64 `json:"file_size"`    // Content size in bytes
+	PaymentAddr string `json:"payment_addr"` // BSV address for payment
+	Expiry      int64  `json:"expiry"`       // Unix timestamp
+	KeyHash     []byte `json:"key_hash"`     // Content key hash
+	CapsuleHash []byte `json:"capsule_hash"` // SHA256(ECDH capsule) for HTLC
 }
 
 // PaymentProof represents a submitted payment for verification.

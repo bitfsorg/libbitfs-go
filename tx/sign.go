@@ -35,7 +35,7 @@ func SignMetanetTx(mtx *MetanetTx, utxos []*UTXO) (string, error) {
 	// 1. Parse the raw unsigned tx bytes into a go-sdk Transaction.
 	sdkTx, err := transaction.NewTransactionFromBytes(mtx.RawTx)
 	if err != nil {
-		return "", fmt.Errorf("%w: failed to parse raw tx: %v", ErrSigningFailed, err)
+		return "", fmt.Errorf("%w: failed to parse raw tx: %w", ErrSigningFailed, err)
 	}
 
 	// 2. Validate that UTXO count matches input count.
@@ -59,7 +59,7 @@ func SignMetanetTx(mtx *MetanetTx, utxos []*UTXO) (string, error) {
 		// Create the P2PKH unlocker from the UTXO's private key.
 		unlocker, err := p2pkh.Unlock(utxo.PrivateKey, nil)
 		if err != nil {
-			return "", fmt.Errorf("%w: failed to create unlocker for input %d: %v",
+			return "", fmt.Errorf("%w: failed to create unlocker for input %d: %w",
 				ErrSigningFailed, i, err)
 		}
 
@@ -76,7 +76,7 @@ func SignMetanetTx(mtx *MetanetTx, utxos []*UTXO) (string, error) {
 
 	// 4. Sign all inputs.
 	if err := sdkTx.Sign(); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrSigningFailed, err)
+		return "", fmt.Errorf("%w: %w", ErrSigningFailed, err)
 	}
 
 	// 5. Update the MetanetTx with signed transaction data.
@@ -106,11 +106,11 @@ func BuildP2PKHScript(pubKey *ec.PublicKey) ([]byte, error) {
 	}
 	addr, err := script.NewAddressFromPublicKey(pubKey, true)
 	if err != nil {
-		return nil, fmt.Errorf("%w: address from pubkey: %v", ErrScriptBuild, err)
+		return nil, fmt.Errorf("%w: address from pubkey: %w", ErrScriptBuild, err)
 	}
 	lockScript, err := p2pkh.Lock(addr)
 	if err != nil {
-		return nil, fmt.Errorf("%w: P2PKH lock script: %v", ErrScriptBuild, err)
+		return nil, fmt.Errorf("%w: P2PKH lock script: %w", ErrScriptBuild, err)
 	}
 	return []byte(*lockScript), nil
 }
@@ -133,7 +133,7 @@ func BuildUnsignedCreateRootTx(params *CreateRootParams) (*MetanetTx, error) {
 	// Input 0: Fee UTXO.
 	feeUTXOHash, err := chainhash.NewHash(params.FeeUTXO.TxID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %v", ErrSigningFailed, err)
+		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %w", ErrSigningFailed, err)
 	}
 	sdkTx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       feeUTXOHash,
@@ -172,11 +172,11 @@ func BuildUnsignedCreateRootTx(params *CreateRootParams) (*MetanetTx, error) {
 		if len(params.ChangeAddr) == 20 {
 			addr, err := script.NewAddressFromPublicKeyHash(params.ChangeAddr, true)
 			if err != nil {
-				return nil, fmt.Errorf("%w: change address: %v", ErrScriptBuild, err)
+				return nil, fmt.Errorf("%w: change address: %w", ErrScriptBuild, err)
 			}
 			changeLockScript, err = p2pkh.Lock(addr)
 			if err != nil {
-				return nil, fmt.Errorf("%w: change lock script: %v", ErrScriptBuild, err)
+				return nil, fmt.Errorf("%w: change lock script: %w", ErrScriptBuild, err)
 			}
 		} else {
 			// Fall back to P_node as change destination.
@@ -224,7 +224,7 @@ func BuildUnsignedCreateChildTx(params *CreateChildParams) (*MetanetTx, error) {
 	// Input 0: P_parent UTXO (Metanet edge).
 	parentUTXOHash, err := chainhash.NewHash(params.ParentUTXO.TxID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid parent UTXO TxID: %v", ErrSigningFailed, err)
+		return nil, fmt.Errorf("%w: invalid parent UTXO TxID: %w", ErrSigningFailed, err)
 	}
 	sdkTx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       parentUTXOHash,
@@ -235,7 +235,7 @@ func BuildUnsignedCreateChildTx(params *CreateChildParams) (*MetanetTx, error) {
 	// Input 1: Fee UTXO.
 	feeUTXOHash, err := chainhash.NewHash(params.FeeUTXO.TxID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %v", ErrSigningFailed, err)
+		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %w", ErrSigningFailed, err)
 	}
 	sdkTx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       feeUTXOHash,
@@ -285,11 +285,11 @@ func BuildUnsignedCreateChildTx(params *CreateChildParams) (*MetanetTx, error) {
 		if len(params.ChangeAddr) == 20 {
 			addr, err := script.NewAddressFromPublicKeyHash(params.ChangeAddr, true)
 			if err != nil {
-				return nil, fmt.Errorf("%w: change address: %v", ErrScriptBuild, err)
+				return nil, fmt.Errorf("%w: change address: %w", ErrScriptBuild, err)
 			}
 			changeLockScript, err = p2pkh.Lock(addr)
 			if err != nil {
-				return nil, fmt.Errorf("%w: change lock script: %v", ErrScriptBuild, err)
+				return nil, fmt.Errorf("%w: change lock script: %w", ErrScriptBuild, err)
 			}
 		} else {
 			// Fall back to P_child as change destination.
@@ -336,7 +336,7 @@ func BuildUnsignedSelfUpdateTx(params *SelfUpdateParams) (*MetanetTx, error) {
 	// Input 0: P_node UTXO (self).
 	nodeUTXOHash, err := chainhash.NewHash(params.NodeUTXO.TxID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid node UTXO TxID: %v", ErrSigningFailed, err)
+		return nil, fmt.Errorf("%w: invalid node UTXO TxID: %w", ErrSigningFailed, err)
 	}
 	sdkTx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       nodeUTXOHash,
@@ -347,7 +347,7 @@ func BuildUnsignedSelfUpdateTx(params *SelfUpdateParams) (*MetanetTx, error) {
 	// Input 1: Fee UTXO.
 	feeUTXOHash, err := chainhash.NewHash(params.FeeUTXO.TxID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %v", ErrSigningFailed, err)
+		return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %w", ErrSigningFailed, err)
 	}
 	sdkTx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       feeUTXOHash,
@@ -386,11 +386,11 @@ func BuildUnsignedSelfUpdateTx(params *SelfUpdateParams) (*MetanetTx, error) {
 		if len(params.ChangeAddr) == 20 {
 			addr, err := script.NewAddressFromPublicKeyHash(params.ChangeAddr, true)
 			if err != nil {
-				return nil, fmt.Errorf("%w: change address: %v", ErrScriptBuild, err)
+				return nil, fmt.Errorf("%w: change address: %w", ErrScriptBuild, err)
 			}
 			changeLockScript, err = p2pkh.Lock(addr)
 			if err != nil {
-				return nil, fmt.Errorf("%w: change lock script: %v", ErrScriptBuild, err)
+				return nil, fmt.Errorf("%w: change lock script: %w", ErrScriptBuild, err)
 			}
 		} else {
 			// Fall back to P_node as change destination.
@@ -411,14 +411,12 @@ func BuildUnsignedSelfUpdateTx(params *SelfUpdateParams) (*MetanetTx, error) {
 // buildOPReturnScript creates an OP_FALSE OP_RETURN script from data pushes.
 func buildOPReturnScript(pushes [][]byte) (*script.Script, error) {
 	s := &script.Script{}
-	// OP_FALSE (OP_0)
-	*s = append(*s, script.Op0)
-	// OP_RETURN
-	*s = append(*s, script.OpRETURN)
+	// OP_FALSE OP_RETURN prefix
+	*s = append(*s, script.Op0, script.OpRETURN)
 	// Append each data push
 	for _, push := range pushes {
 		if err := s.AppendPushData(push); err != nil {
-			return nil, fmt.Errorf("%w: OP_RETURN push data: %v", ErrScriptBuild, err)
+			return nil, fmt.Errorf("%w: OP_RETURN push data: %w", ErrScriptBuild, err)
 		}
 	}
 	return s, nil
@@ -429,11 +427,11 @@ func buildOPReturnScript(pushes [][]byte) (*script.Script, error) {
 func BuildP2PKHOutput(pubKeyHash []byte, satoshis uint64) (*transaction.TransactionOutput, error) {
 	addr, err := script.NewAddressFromPublicKeyHash(pubKeyHash, true)
 	if err != nil {
-		return nil, fmt.Errorf("%w: address from hash: %v", ErrScriptBuild, err)
+		return nil, fmt.Errorf("%w: address from hash: %w", ErrScriptBuild, err)
 	}
 	lockScript, err := p2pkh.Lock(addr)
 	if err != nil {
-		return nil, fmt.Errorf("%w: P2PKH lock: %v", ErrScriptBuild, err)
+		return nil, fmt.Errorf("%w: P2PKH lock: %w", ErrScriptBuild, err)
 	}
 	return &transaction.TransactionOutput{
 		Satoshis:      satoshis,

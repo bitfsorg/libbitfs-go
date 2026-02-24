@@ -28,6 +28,11 @@ type BlockchainService interface {
 
 	// GetBestBlockHeight returns the height of the current chain tip.
 	GetBestBlockHeight(ctx context.Context) (uint64, error)
+
+	// ImportAddress imports a watch-only address into the node's wallet so that
+	// ListUnspent can find its UTXOs. Rescans the chain to discover existing outputs.
+	// No-op if the address is already imported. Safe to call multiple times.
+	ImportAddress(ctx context.Context, address string) error
 }
 
 // UTXO represents an unspent transaction output.

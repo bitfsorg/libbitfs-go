@@ -63,10 +63,10 @@ var (
 
 // predefined maps network names to their configs.
 var predefined = map[string]*NetworkConfig{
-	"mainnet":      &MainNet,
-	"testnet":      &TestNet,
-	"teratestnet":  &TeraTestNet,
-	"regtest":      &RegTest,
+	"mainnet":     &MainNet,
+	"testnet":     &TestNet,
+	"teratestnet": &TeraTestNet,
+	"regtest":     &RegTest,
 }
 
 // GetNetwork returns a predefined network by name.

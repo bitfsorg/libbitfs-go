@@ -183,9 +183,9 @@ func TestParsePaymentHeaders_MissingHeaders(t *testing.T) {
 
 func TestParsePaymentHeaders_InvalidValues(t *testing.T) {
 	tests := []struct {
-		name    string
-		header  string
-		value   string
+		name   string
+		header string
+		value  string
 	}{
 		{"invalid price", HeaderPrice, "not-a-number"},
 		{"invalid price per KB", HeaderPricePerKB, "xyz"},
@@ -259,6 +259,12 @@ func validHTLCParams() *HTLCParams {
 		buyerPub[i] = byte(i)
 	}
 
+	sellerPub := make([]byte, 33)
+	sellerPub[0] = 0x03
+	for i := 1; i < 33; i++ {
+		sellerPub[i] = byte(i + 50)
+	}
+
 	sellerAddr := make([]byte, 20)
 	for i := range sellerAddr {
 		sellerAddr[i] = byte(i + 100)
@@ -267,11 +273,12 @@ func validHTLCParams() *HTLCParams {
 	capsuleHash := sha256.Sum256([]byte("test-capsule"))
 
 	return &HTLCParams{
-		BuyerPubKey: buyerPub,
-		SellerAddr:  sellerAddr,
-		CapsuleHash: capsuleHash[:],
-		Amount:      1000,
-		Timeout:     144,
+		BuyerPubKey:  buyerPub,
+		SellerPubKey: sellerPub,
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash[:],
+		Amount:       1000,
+		Timeout:      144,
 	}
 }
 
@@ -308,15 +315,15 @@ func TestBuildHTLC_Success(t *testing.T) {
 	}
 	assert.True(t, foundElse, "OP_ELSE not found in HTLC script")
 
-	// Find OP_CHECKLOCKTIMEVERIFY
-	foundCLTV := false
+	// Find OP_CHECKMULTISIG (buyer refund path uses 2-of-2 multisig)
+	foundMultisig := false
 	for _, chunk := range chunks {
-		if chunk.Op == script.OpCHECKLOCKTIMEVERIFY {
-			foundCLTV = true
+		if chunk.Op == script.OpCHECKMULTISIG {
+			foundMultisig = true
 			break
 		}
 	}
-	assert.True(t, foundCLTV, "OP_CHECKLOCKTIMEVERIFY not found in HTLC script")
+	assert.True(t, foundMultisig, "OP_CHECKMULTISIG not found in HTLC script")
 
 	// Verify OP_ENDIF is last
 	assert.Equal(t, script.OpENDIF, chunks[len(chunks)-1].Op)
@@ -330,6 +337,13 @@ func TestBuildHTLC_NilParams(t *testing.T) {
 func TestBuildHTLC_InvalidBuyerPubKey(t *testing.T) {
 	params := validHTLCParams()
 	params.BuyerPubKey = []byte{0x02, 0x01} // too short
+	_, err := BuildHTLC(params)
+	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
+}
+
+func TestBuildHTLC_InvalidSellerPubKey(t *testing.T) {
+	params := validHTLCParams()
+	params.SellerPubKey = []byte{0x03, 0x01} // too short
 	_, err := BuildHTLC(params)
 	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
 }
@@ -374,7 +388,7 @@ func TestBuildHTLC_ContainsBuyerPubKey(t *testing.T) {
 	// Find buyer pubkey in the script
 	found := false
 	for _, chunk := range chunks {
-		if chunk.Data != nil && len(chunk.Data) == 33 {
+		if len(chunk.Data) == 33 {
 			match := true
 			for i := range chunk.Data {
 				if chunk.Data[i] != params.BuyerPubKey[i] {
@@ -391,31 +405,6 @@ func TestBuildHTLC_ContainsBuyerPubKey(t *testing.T) {
 	assert.True(t, found, "buyer pubkey not found in HTLC script")
 }
 
-// --- encodeScriptNum Tests ---
-
-func TestEncodeScriptNum(t *testing.T) {
-	tests := []struct {
-		name string
-		n    int64
-		want []byte
-	}{
-		{"zero", 0, []byte{}},
-		{"one", 1, []byte{0x01}},
-		{"127", 127, []byte{0x7f}},
-		{"128", 128, []byte{0x80, 0x00}},
-		{"144 (default timeout)", 144, []byte{0x90, 0x00}},
-		{"255", 255, []byte{0xff, 0x00}},
-		{"256", 256, []byte{0x00, 0x01}},
-		{"negative one", -1, []byte{0x81}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := encodeScriptNum(tt.n)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
 
 // --- ParseHTLCPreimage Tests ---
 
@@ -727,7 +716,7 @@ func TestBuildHTLC_ContainsSellerAddr(t *testing.T) {
 	// Find seller address hash (20 bytes) in the script
 	found := false
 	for _, chunk := range chunks {
-		if chunk.Data != nil && len(chunk.Data) == PubKeyHashLen {
+		if len(chunk.Data) == PubKeyHashLen {
 			match := true
 			for i := range chunk.Data {
 				if chunk.Data[i] != params.SellerAddr[i] {
@@ -744,10 +733,8 @@ func TestBuildHTLC_ContainsSellerAddr(t *testing.T) {
 	assert.True(t, found, "seller address hash not found in HTLC script")
 }
 
-func TestBuildHTLC_TimeoutValueInScript(t *testing.T) {
+func TestBuildHTLC_ContainsSellerPubKey(t *testing.T) {
 	params := validHTLCParams()
-	params.Timeout = 288 // 2 days in blocks
-
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
@@ -755,31 +742,24 @@ func TestBuildHTLC_TimeoutValueInScript(t *testing.T) {
 	chunks, err := s.Chunks()
 	require.NoError(t, err)
 
-	// The timeout value should be encoded by encodeScriptNum
-	expectedTimeout := encodeScriptNum(int64(params.Timeout))
-
-	// Find the timeout value: it should be pushed right before OP_CHECKLOCKTIMEVERIFY
+	// Find seller pubkey in the 2-of-2 multisig section
 	found := false
-	for i, chunk := range chunks {
-		if chunk.Op == script.OpCHECKLOCKTIMEVERIFY && i > 0 {
-			prevChunk := chunks[i-1]
-			if prevChunk.Data != nil && len(prevChunk.Data) == len(expectedTimeout) {
-				match := true
-				for j := range prevChunk.Data {
-					if prevChunk.Data[j] != expectedTimeout[j] {
-						match = false
-						break
-					}
-				}
-				if match {
-					found = true
+	for _, chunk := range chunks {
+		if len(chunk.Data) == CompressedPubKeyLen {
+			match := true
+			for i := range chunk.Data {
+				if chunk.Data[i] != params.SellerPubKey[i] {
+					match = false
+					break
 				}
 			}
-			break
+			if match {
+				found = true
+				break
+			}
 		}
 	}
-	assert.True(t, found, "timeout value %d (encoded as %x) not found before OP_CHECKLOCKTIMEVERIFY in HTLC script",
-		params.Timeout, expectedTimeout)
+	assert.True(t, found, "seller pubkey not found in HTLC script")
 }
 
 // --- Supplementary Tests: ParseHTLCPreimage Edge Cases ---
@@ -867,7 +847,7 @@ func TestCalculatePrice_LargeValues(t *testing.T) {
 			name:       "100 sat/KB for 100 MB",
 			pricePerKB: 100,
 			fileSize:   100 * 1024 * 1024, // 100 MiB = 102400 KB
-			want:       100 * 102400,       // 10240000 satoshis
+			want:       100 * 102400,      // 10240000 satoshis
 		},
 		{
 			name:       "max safe single product",

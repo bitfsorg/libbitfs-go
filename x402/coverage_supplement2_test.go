@@ -51,7 +51,7 @@ func TestParseHTLCPreimage_NonOpTrueLastChunk(t *testing.T) {
 	_ = s.AppendPushData([]byte("sig"))
 	_ = s.AppendPushData([]byte("pubkey"))
 	_ = s.AppendPushData([]byte("preimage"))
-	_ = s.AppendOpcodes(script.OpFALSE) // Not OP_TRUE → buyer refund path, not seller claim
+	_ = s.AppendOpcodes(script.OpFALSE) // Not OP_TRUE -> buyer refund path, not seller claim
 
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,
@@ -118,42 +118,11 @@ func TestVerifyPayment_ZeroPriceInvoice(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// encodeScriptNum — more boundary values
+// BuildHTLC — 2-of-2 multisig refund path
 // ---------------------------------------------------------------------------
 
-func TestEncodeScriptNum_LargePositive(t *testing.T) {
-	// 0x100000 = 1048576 → 3 bytes: [0x00, 0x00, 0x10]
-	result := encodeScriptNum(0x100000)
-	assert.Equal(t, []byte{0x00, 0x00, 0x10}, result)
-}
-
-func TestEncodeScriptNum_MaxInt32(t *testing.T) {
-	// 2^31 - 1 = 2147483647
-	result := encodeScriptNum(2147483647)
-	assert.NotEmpty(t, result)
-	// 0x7FFFFFFF → [0xFF, 0xFF, 0xFF, 0x7F] — high bit NOT set on MSB
-	assert.Equal(t, []byte{0xFF, 0xFF, 0xFF, 0x7F}, result)
-}
-
-func TestEncodeScriptNum_PowerOfTwo(t *testing.T) {
-	// 256 = 0x100 → [0x00, 0x01]
-	result := encodeScriptNum(256)
-	assert.Equal(t, []byte{0x00, 0x01}, result)
-}
-
-func TestEncodeScriptNum_NegativeLarge(t *testing.T) {
-	// -256 → [0x00, 0x81] (0x100 with sign bit)
-	result := encodeScriptNum(-256)
-	assert.Equal(t, []byte{0x00, 0x81}, result)
-}
-
-// ---------------------------------------------------------------------------
-// BuildHTLC — large timeout encoding
-// ---------------------------------------------------------------------------
-
-func TestBuildHTLC_LargeTimeout(t *testing.T) {
+func TestBuildHTLC_MultisigRefundPath(t *testing.T) {
 	params := validHTLCParams()
-	params.Timeout = 500000 // large value
 
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
@@ -162,10 +131,12 @@ func TestBuildHTLC_LargeTimeout(t *testing.T) {
 	chunks, err := s.Chunks()
 	require.NoError(t, err)
 
-	// Find CLTV and verify timeout was encoded
+	// Find OP_CHECKMULTISIG and verify OP_2 precedes it
 	for i, chunk := range chunks {
-		if chunk.Op == script.OpCHECKLOCKTIMEVERIFY && i > 0 {
-			assert.NotNil(t, chunks[i-1].Data, "timeout data should precede OP_CHECKLOCKTIMEVERIFY")
+		if chunk.Op == script.OpCHECKMULTISIG && i >= 4 {
+			// Should be: OP_2 <buyer_pk> <seller_pk> OP_2 OP_CHECKMULTISIG
+			assert.Equal(t, script.Op2, chunks[i-1].Op, "OP_2 should precede OP_CHECKMULTISIG")
+			assert.Equal(t, script.Op2, chunks[i-4].Op, "OP_2 should start the multisig block")
 			break
 		}
 	}

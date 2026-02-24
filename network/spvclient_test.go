@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tongxiaofeng/libbitfs/spv"
+	"github.com/tongxiaofeng/libbitfs-go/spv"
 )
 
 func TestSPVClientVerifyTxConfirmed(t *testing.T) {
@@ -31,8 +31,9 @@ func TestSPVClientVerifyTxConfirmed(t *testing.T) {
 	store := spv.NewMemHeaderStore()
 	require.NoError(t, store.PutHeader(header))
 
-	blockHash := hex.EncodeToString(header.Hash)
-	txidHex := hex.EncodeToString(txHash)
+	// Use display hex (reversed byte order), matching real Bitcoin RPC convention.
+	blockHash := hex.EncodeToString(reverseBytesCopy(header.Hash))
+	txidHex := hex.EncodeToString(reverseBytesCopy(txHash))
 
 	mock := &MockBlockchainService{
 		GetRawTxFn: func(ctx context.Context, txid string) ([]byte, error) {

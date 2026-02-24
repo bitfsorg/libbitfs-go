@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tongxiaofeng/libbitfs/tx"
+	"github.com/tongxiaofeng/libbitfs-go/tx"
 )
 
 // --- Helper types and functions ---
@@ -312,9 +312,9 @@ func TestSerializePayload_Nil(t *testing.T) {
 
 func TestSerializePayload_OnChainContent(t *testing.T) {
 	node := &Node{
-		Version:  1,
-		Type:     NodeTypeFile,
-		OnChain:  true,
+		Version: 1,
+		Type:    NodeTypeFile,
+		OnChain: true,
 		ContentTxIDs: [][]byte{
 			makeTxID(0x01),
 			makeTxID(0x02),
@@ -2028,4 +2028,171 @@ func TestFollowLink_TwoNodeCycle(t *testing.T) {
 	_, err := FollowLink(store, linkA, MaxLinkDepth)
 	assert.ErrorIs(t, err, ErrLinkDepthExceeded,
 		"two-node cycle A->B->A should be caught by depth counter")
+}
+
+// =============================================================================
+// Benchmarks
+// =============================================================================
+
+func BenchmarkSerializePayload(b *testing.B) {
+	node := &Node{
+		Version:    1,
+		Type:       NodeTypeDir,
+		Op:         OpCreate,
+		MimeType:   "application/octet-stream",
+		FileSize:   1048576,
+		KeyHash:    bytes.Repeat([]byte{0xBB}, 32),
+		Access:     AccessPaid,
+		PricePerKB: 100,
+		Timestamp:  1700000000,
+		Parent:     makePubKey(0x01),
+		Index:      5,
+		Children: []ChildEntry{
+			{Index: 0, Name: "readme.txt", Type: NodeTypeFile, PubKey: makePubKey(0x10), Hardened: false},
+			{Index: 1, Name: "docs", Type: NodeTypeDir, PubKey: makePubKey(0x20), Hardened: true},
+		},
+		NextChildIndex: 2,
+		Domain:         "example.com",
+		Description:    "Test directory",
+		Encrypted:      true,
+		Metadata:       make(map[string]string),
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := SerializePayload(node)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDeserializePayload(b *testing.B) {
+	node := &Node{
+		Version:    1,
+		Type:       NodeTypeDir,
+		Op:         OpCreate,
+		MimeType:   "application/octet-stream",
+		FileSize:   1048576,
+		KeyHash:    bytes.Repeat([]byte{0xBB}, 32),
+		Access:     AccessPaid,
+		PricePerKB: 100,
+		Timestamp:  1700000000,
+		Parent:     makePubKey(0x01),
+		Index:      5,
+		Children: []ChildEntry{
+			{Index: 0, Name: "readme.txt", Type: NodeTypeFile, PubKey: makePubKey(0x10), Hardened: false},
+			{Index: 1, Name: "docs", Type: NodeTypeDir, PubKey: makePubKey(0x20), Hardened: true},
+		},
+		NextChildIndex: 2,
+		Domain:         "example.com",
+		Description:    "Test directory",
+		Encrypted:      true,
+		Metadata:       make(map[string]string),
+	}
+
+	payload, err := SerializePayload(node)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		decoded := &Node{Metadata: make(map[string]string)}
+		if err := deserializePayload(payload, decoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSerializeDeserializeRoundTrip(b *testing.B) {
+	node := &Node{
+		Version:    1,
+		Type:       NodeTypeFile,
+		Op:         OpCreate,
+		MimeType:   "text/plain",
+		FileSize:   4096,
+		KeyHash:    bytes.Repeat([]byte{0xDD}, 32),
+		Access:     AccessPaid,
+		PricePerKB: 50,
+		Timestamp:  1700000000,
+		Parent:     makePubKey(0x01),
+		Index:      3,
+		Encrypted:  true,
+		Metadata:   make(map[string]string),
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		payload, err := SerializePayload(node)
+		if err != nil {
+			b.Fatal(err)
+		}
+		decoded := &Node{Metadata: make(map[string]string)}
+		if err := deserializePayload(payload, decoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseNode(b *testing.B) {
+	pNode := makePubKey(0x01)
+	parentTxID := makeTxID(0x02)
+
+	node := &Node{
+		Version:  1,
+		Type:     NodeTypeFile,
+		Op:       OpCreate,
+		MimeType: "text/plain",
+		FileSize: 256,
+		KeyHash:  bytes.Repeat([]byte{0xDD}, 32),
+		Metadata: make(map[string]string),
+	}
+
+	payload, err := SerializePayload(node)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	pushes := [][]byte{
+		tx.MetaFlagBytes,
+		pNode,
+		parentTxID,
+		payload,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := ParseNode(pushes)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkAddChild(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		dir := makeRootDir(makePubKey(0x01))
+		b.StartTimer()
+		_, err := AddChild(dir, "file.txt", NodeTypeFile, makePubKey(0x10), false)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkFindChild(b *testing.B) {
+	dir := makeRootDir(makePubKey(0x01))
+	for i := 0; i < 100; i++ {
+		pk := makePubKey(byte(i + 10))
+		name := fmt.Sprintf("file-%03d.txt", i)
+		_, _ = AddChild(dir, name, NodeTypeFile, pk, false)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FindChild(dir, "file-050.txt")
+	}
 }

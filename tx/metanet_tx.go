@@ -8,47 +8,47 @@ import (
 
 // CreateRootParams holds parameters for building a root node transaction.
 type CreateRootParams struct {
-	NodePubKey  *ec.PublicKey   // P_node for the root
-	NodePrivKey *ec.PrivateKey  // D_node for UTXO tracking
-	Payload     []byte          // Protobuf-encoded BitFSPayload
+	NodePubKey  *ec.PublicKey  // P_node for the root
+	NodePrivKey *ec.PrivateKey // D_node for UTXO tracking
+	Payload     []byte         // Protobuf-encoded BitFSPayload
 	FeeUTXO     *UTXO          // Fee chain UTXO to spend
-	ChangeAddr  []byte          // 20-byte P2PKH hash for change
-	FeeRate     uint64          // sat/KB (0 = use DefaultFeeRate)
+	ChangeAddr  []byte         // 20-byte P2PKH hash for change
+	FeeRate     uint64         // sat/KB (0 = use DefaultFeeRate)
 }
 
 // CreateChildParams holds parameters for building a child node transaction.
 type CreateChildParams struct {
-	NodePubKey    *ec.PublicKey   // Child node's public key
-	ParentTxID    []byte          // Parent's latest TxID (32 bytes)
-	Payload       []byte          // Protobuf-encoded BitFSPayload
+	NodePubKey    *ec.PublicKey  // Child node's public key
+	ParentTxID    []byte         // Parent's latest TxID (32 bytes)
+	Payload       []byte         // Protobuf-encoded BitFSPayload
 	ParentUTXO    *UTXO          // P_parent UTXO to spend (Metanet edge)
-	ParentPrivKey *ec.PrivateKey  // D_parent for Input 0 signing
+	ParentPrivKey *ec.PrivateKey // D_parent for Input 0 signing
 	FeeUTXO       *UTXO          // Fee chain UTXO
-	ParentPubKey  *ec.PublicKey   // P_parent for Output 2 refresh
-	ChangeAddr    []byte          // 20-byte P2PKH hash for change
+	ParentPubKey  *ec.PublicKey  // P_parent for Output 2 refresh
+	ChangeAddr    []byte         // 20-byte P2PKH hash for change
 	FeeRate       uint64
 }
 
 // SelfUpdateParams holds parameters for building a self-update transaction.
 type SelfUpdateParams struct {
-	NodePubKey   *ec.PublicKey   // Node's public key
-	NodePrivKey  *ec.PrivateKey  // D_node for Input 0 signing
-	ParentTxID   []byte          // Original parent TxID (preserved)
-	Payload      []byte          // Updated Protobuf payload
-	NodeUTXO     *UTXO          // P_node's current UTXO
-	FeeUTXO      *UTXO          // Fee chain UTXO
-	ChangeAddr   []byte          // 20-byte P2PKH hash for change
-	FeeRate      uint64
+	NodePubKey  *ec.PublicKey  // Node's public key
+	NodePrivKey *ec.PrivateKey // D_node for Input 0 signing
+	ParentTxID  []byte         // Original parent TxID (preserved)
+	Payload     []byte         // Updated Protobuf payload
+	NodeUTXO    *UTXO          // P_node's current UTXO
+	FeeUTXO     *UTXO          // Fee chain UTXO
+	ChangeAddr  []byte         // 20-byte P2PKH hash for change
+	FeeRate     uint64
 }
 
 // DataTxParams holds parameters for building an on-chain data transaction.
 type DataTxParams struct {
-	NodePubKey    *ec.PublicKey   // For OP_DROP output locking
-	NodePrivKey   *ec.PrivateKey  // D_node for signing
-	Content       []byte          // Encrypted content to embed
-	SourceUTXO    *UTXO          // UTXO to spend
-	ChangeAddr    []byte          // 20-byte P2PKH hash for change
-	FeeRate       uint64
+	NodePubKey  *ec.PublicKey  // For OP_DROP output locking
+	NodePrivKey *ec.PrivateKey // D_node for signing
+	Content     []byte         // Encrypted content to embed
+	SourceUTXO  *UTXO          // UTXO to spend
+	ChangeAddr  []byte         // 20-byte P2PKH hash for change
+	FeeRate     uint64
 }
 
 // BuildCreateRoot constructs a Metanet root node transaction.

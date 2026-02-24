@@ -32,13 +32,13 @@ func VerifyPayment(proof *PaymentProof, invoice *Invoice) error {
 
 	tx, err := transaction.NewTransactionFromBytes(proof.RawTx)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidTx, err)
+		return fmt.Errorf("%w: %w", ErrInvalidTx, err)
 	}
 
 	// Parse the expected payment address to get its script
 	expectedAddr, err := script.NewAddressFromString(invoice.PaymentAddr)
 	if err != nil {
-		return fmt.Errorf("%w: invalid invoice address: %v", ErrInvalidParams, err)
+		return fmt.Errorf("%w: invalid invoice address: %w", ErrInvalidParams, err)
 	}
 
 	expectedPKH := []byte(expectedAddr.PublicKeyHash)

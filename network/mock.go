@@ -13,6 +13,7 @@ type MockBlockchainService struct {
 	GetBlockHeaderFn     func(ctx context.Context, blockHash string) ([]byte, error)
 	GetMerkleProofFn     func(ctx context.Context, txid string) (*MerkleProof, error)
 	GetBestBlockHeightFn func(ctx context.Context) (uint64, error)
+	ImportAddressFn      func(ctx context.Context, address string) error
 }
 
 func (m *MockBlockchainService) ListUnspent(ctx context.Context, address string) ([]*UTXO, error) {
@@ -38,4 +39,10 @@ func (m *MockBlockchainService) GetMerkleProof(ctx context.Context, txid string)
 }
 func (m *MockBlockchainService) GetBestBlockHeight(ctx context.Context) (uint64, error) {
 	return m.GetBestBlockHeightFn(ctx)
+}
+func (m *MockBlockchainService) ImportAddress(ctx context.Context, address string) error {
+	if m.ImportAddressFn != nil {
+		return m.ImportAddressFn(ctx, address)
+	}
+	return nil // no-op by default for backward compatibility
 }

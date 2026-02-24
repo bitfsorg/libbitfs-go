@@ -876,6 +876,144 @@ func TestDeriveNodeKey_MultipleOutOfRange(t *testing.T) {
 	assert.ErrorIs(t, err, ErrFileIndexOutOfRange)
 }
 
+// =============================================================================
+// Benchmarks
+// =============================================================================
+
+func newBenchWallet(b *testing.B) *Wallet {
+	b.Helper()
+	mnemonic := "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	seed, err := SeedFromMnemonic(mnemonic, "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	w, err := NewWallet(seed, &MainNet)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return w
+}
+
+func BenchmarkDeriveNodeKey(b *testing.B) {
+	b.Run("root", func(b *testing.B) {
+		w := newBenchWallet(b)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := w.DeriveNodeKey(0, nil, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("depth_1", func(b *testing.B) {
+		w := newBenchWallet(b)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := w.DeriveNodeKey(0, []uint32{1}, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("depth_3", func(b *testing.B) {
+		w := newBenchWallet(b)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := w.DeriveNodeKey(0, []uint32{3, 1, 7}, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("depth_10", func(b *testing.B) {
+		w := newBenchWallet(b)
+		path := make([]uint32, 10)
+		for i := range path {
+			path[i] = uint32(i + 1)
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := w.DeriveNodeKey(0, path, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkDeriveFeeKey(b *testing.B) {
+	w := newBenchWallet(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := w.DeriveFeeKey(ExternalChain, 0)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDeriveVaultRootKey(b *testing.B) {
+	w := newBenchWallet(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := w.DeriveVaultRootKey(0)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSeedFromMnemonic(b *testing.B) {
+	mnemonic := "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := SeedFromMnemonic(mnemonic, "")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncryptSeed(b *testing.B) {
+	seed := make([]byte, 64)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	password := "benchmark-password"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := EncryptSeed(seed, password)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDecryptSeed(b *testing.B) {
+	seed := make([]byte, 64)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	password := "benchmark-password"
+
+	encrypted, err := EncryptSeed(seed, password)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := DecryptSeed(encrypted, password)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // writeFile is a test helper for writing temporary files.
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)

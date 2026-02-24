@@ -34,7 +34,7 @@ var DefaultHTTPClient HTTPClient = http.DefaultClient
 
 // wellKnownResponse represents the JSON structure of .well-known/bsvalias.
 type wellKnownResponse struct {
-	BSVAlias     string            `json:"bsvalias"`
+	BSVAlias     string                 `json:"bsvalias"`
 	Capabilities map[string]interface{} `json:"capabilities"`
 }
 
@@ -64,9 +64,9 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 	url := "https://" + domain + "/.well-known/bsvalias"
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("%w: GET %s: %v", ErrPaymailDiscovery, url, err)
+		return nil, fmt.Errorf("%w: GET %s: %w", ErrPaymailDiscovery, url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPaymailDiscovery, url, resp.StatusCode)
@@ -74,12 +74,12 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reading response: %v", ErrPaymailDiscovery, err)
+		return nil, fmt.Errorf("%w: reading response: %w", ErrPaymailDiscovery, err)
 	}
 
 	var wk wellKnownResponse
 	if err := json.Unmarshal(body, &wk); err != nil {
-		return nil, fmt.Errorf("%w: parsing JSON: %v", ErrPaymailDiscovery, err)
+		return nil, fmt.Errorf("%w: parsing JSON: %w", ErrPaymailDiscovery, err)
 	}
 
 	caps := &PaymailCapabilities{}
@@ -118,7 +118,7 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 	// First discover capabilities
 	caps, err := DiscoverCapabilitiesWithClient(domain, client)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPKIResolution, err)
+		return nil, fmt.Errorf("%w: %w", ErrPKIResolution, err)
 	}
 
 	if caps.PKI == "" {
@@ -131,9 +131,9 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 
 	resp, err := client.Get(pkiURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: GET %s: %v", ErrPKIResolution, pkiURL, err)
+		return nil, fmt.Errorf("%w: GET %s: %w", ErrPKIResolution, pkiURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPKIResolution, pkiURL, resp.StatusCode)
@@ -141,12 +141,12 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reading response: %v", ErrPKIResolution, err)
+		return nil, fmt.Errorf("%w: reading response: %w", ErrPKIResolution, err)
 	}
 
 	var pki PKIResponse
 	if err := json.Unmarshal(body, &pki); err != nil {
-		return nil, fmt.Errorf("%w: parsing PKI response: %v", ErrPKIResolution, err)
+		return nil, fmt.Errorf("%w: parsing PKI response: %w", ErrPKIResolution, err)
 	}
 
 	if pki.PubKey == "" {
@@ -155,7 +155,7 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 
 	pubKeyBytes, err := hex.DecodeString(pki.PubKey)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid hex public key: %v", ErrInvalidPubKey, err)
+		return nil, fmt.Errorf("%w: invalid hex public key: %w", ErrInvalidPubKey, err)
 	}
 
 	if err := validateCompressedPubKey(pubKeyBytes); err != nil {

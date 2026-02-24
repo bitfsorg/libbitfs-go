@@ -10,10 +10,11 @@ import (
 // HTLCParams holds parameters for creating an HTLC transaction.
 type HTLCParams struct {
 	BuyerPubKey  []byte // Buyer's compressed public key (33 bytes)
+	SellerPubKey []byte // Seller's compressed public key (33 bytes)
 	SellerAddr   []byte // Seller's P2PKH address hash (20 bytes)
 	CapsuleHash  []byte // SHA256(capsule), 32 bytes
 	Amount       uint64 // Payment amount in satoshis
-	Timeout      uint32 // Timeout in blocks (default 144 = ~24 hours)
+	Timeout      uint32 // Timeout in blocks (default 144 = ~24 hours), used for nLockTime on refund tx
 }
 
 const (
@@ -33,15 +34,16 @@ const (
 // BuildHTLC constructs an HTLC locking script:
 //
 //	OP_IF
+//	  // Seller claim: reveal capsule + seller sig (P2PKH-style)
 //	  OP_SHA256 <capsule_hash> OP_EQUALVERIFY
-//	  <seller_pubkey_hash> OP_CHECKSIG  -- Note: uses P2PKH-style check
+//	  OP_DUP OP_HASH160 <seller_addr> OP_EQUALVERIFY OP_CHECKSIG
 //	OP_ELSE
-//	  <timeout> OP_CHECKLOCKTIMEVERIFY OP_DROP
-//	  <buyer_pubkey> OP_CHECKSIG
+//	  // Buyer refund: 2-of-2 multisig (spent via pre-signed refund tx)
+//	  OP_2 <buyer_pubkey> <seller_pubkey> OP_2 OP_CHECKMULTISIG
 //	OP_ENDIF
 //
 // The seller claims by providing the capsule preimage and their signature.
-// The buyer can reclaim after timeout with their signature.
+// The buyer refunds via a pre-signed 2-of-2 multisig transaction with nLockTime.
 func BuildHTLC(params *HTLCParams) ([]byte, error) {
 	if params == nil {
 		return nil, fmt.Errorf("%w: nil params", ErrHTLCBuildFailed)
@@ -49,6 +51,10 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 	if len(params.BuyerPubKey) != CompressedPubKeyLen {
 		return nil, fmt.Errorf("%w: buyer pubkey must be %d bytes, got %d",
 			ErrHTLCBuildFailed, CompressedPubKeyLen, len(params.BuyerPubKey))
+	}
+	if len(params.SellerPubKey) != CompressedPubKeyLen {
+		return nil, fmt.Errorf("%w: seller pubkey must be %d bytes, got %d",
+			ErrHTLCBuildFailed, CompressedPubKeyLen, len(params.SellerPubKey))
 	}
 	if len(params.SellerAddr) != PubKeyHashLen {
 		return nil, fmt.Errorf("%w: seller address must be %d bytes, got %d",
@@ -69,65 +75,62 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 
 	// OP_IF
 	if err := s.AppendOpcodes(script.OpIF); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 
 	// Seller claim path: OP_SHA256 <capsule_hash> OP_EQUALVERIFY
 	if err := s.AppendOpcodes(script.OpSHA256); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendPushData(params.CapsuleHash); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 
 	// Seller verification: OP_DUP OP_HASH160 <seller_addr> OP_EQUALVERIFY OP_CHECKSIG
 	if err := s.AppendOpcodes(script.OpDUP); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpHASH160); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendPushData(params.SellerAddr); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpCHECKSIG); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 
 	// OP_ELSE
 	if err := s.AppendOpcodes(script.OpELSE); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 
-	// Buyer refund path: <timeout> OP_CHECKLOCKTIMEVERIFY OP_DROP
-	timeoutBytes := encodeScriptNum(int64(params.Timeout))
-	if err := s.AppendPushData(timeoutBytes); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+	// Buyer refund path: OP_2 <buyer_pubkey> <seller_pubkey> OP_2 OP_CHECKMULTISIG
+	if err := s.AppendOpcodes(script.Op2); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
-	if err := s.AppendOpcodes(script.OpCHECKLOCKTIMEVERIFY); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
-	}
-	if err := s.AppendOpcodes(script.OpDROP); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
-	}
-
-	// Buyer verification: <buyer_pubkey> OP_CHECKSIG
 	if err := s.AppendPushData(params.BuyerPubKey); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
-	if err := s.AppendOpcodes(script.OpCHECKSIG); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+	if err := s.AppendPushData(params.SellerPubKey); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.Op2); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpCHECKMULTISIG); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 
 	// OP_ENDIF
 	if err := s.AppendOpcodes(script.OpENDIF); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
 	}
 
 	return s.Bytes(), nil
@@ -146,7 +149,7 @@ func ParseHTLCPreimage(spendingTx []byte) ([]byte, error) {
 
 	tx, err := transaction.NewTransactionFromBytes(spendingTx)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidTx, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidTx, err)
 	}
 
 	// Look through all inputs for an HTLC spend
@@ -174,7 +177,7 @@ func ParseHTLCPreimage(spendingTx []byte) ([]byte, error) {
 
 		// The preimage is the third-from-last element (before OP_TRUE)
 		preimageChunk := chunks[len(chunks)-2]
-		if preimageChunk.Data == nil || len(preimageChunk.Data) == 0 {
+		if len(preimageChunk.Data) == 0 {
 			continue
 		}
 
@@ -182,36 +185,4 @@ func ParseHTLCPreimage(spendingTx []byte) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("%w: no HTLC preimage found in transaction inputs", ErrInvalidPreimage)
-}
-
-// encodeScriptNum encodes an integer as a Bitcoin script number (little-endian).
-func encodeScriptNum(n int64) []byte {
-	if n == 0 {
-		return []byte{}
-	}
-
-	negative := n < 0
-	if negative {
-		n = -n
-	}
-
-	// Encode as little-endian
-	var result []byte
-	for n > 0 {
-		result = append(result, byte(n&0xff))
-		n >>= 8
-	}
-
-	// If the most significant bit is set, add a byte for the sign
-	if result[len(result)-1]&0x80 != 0 {
-		if negative {
-			result = append(result, 0x80)
-		} else {
-			result = append(result, 0x00)
-		}
-	} else if negative {
-		result[len(result)-1] |= 0x80
-	}
-
-	return result
 }

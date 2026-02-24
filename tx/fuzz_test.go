@@ -23,8 +23,8 @@ func FuzzParseOPReturnDataNoPanic(f *testing.F) {
 // FuzzBuildParseRoundTrip verifies BuildOPReturnData followed by
 // ParseOPReturnData returns the original fields.
 func FuzzBuildParseRoundTrip(f *testing.F) {
-	f.Add([]byte{0x01, 0x02, 0x03})                  // payload, no parent
-	f.Add(make([]byte, 100))                          // larger payload
+	f.Add([]byte{0x01, 0x02, 0x03})                         // payload, no parent
+	f.Add(make([]byte, 100))                                // larger payload
 	f.Add([]byte{0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00}) // TLV-like payload
 
 	privKey, err := ec.NewPrivateKey()
@@ -95,6 +95,6 @@ func FuzzEstimateFeeNoPanic(f *testing.F) {
 		if txSize < 0 {
 			return // negative size is meaningless
 		}
-		EstimateFee(txSize, feeRate)
+		_ = EstimateFee(txSize, feeRate)
 	})
 }

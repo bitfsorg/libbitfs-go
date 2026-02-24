@@ -44,11 +44,11 @@ type TxStore interface {
 
 // MemHeaderStore is an in-memory implementation of HeaderStore for testing.
 type MemHeaderStore struct {
-	mu            sync.RWMutex
-	byHash        map[string]*BlockHeader
-	byHeight      map[uint32]*BlockHeader
-	tipHeight     uint32
-	hasTip        bool
+	mu        sync.RWMutex
+	byHash    map[string]*BlockHeader
+	byHeight  map[uint32]*BlockHeader
+	tipHeight uint32
+	hasTip    bool
 }
 
 // NewMemHeaderStore creates a new in-memory header store.

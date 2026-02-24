@@ -158,9 +158,9 @@ func TestDiscoverCapabilities_ContainsKeywordMatch(t *testing.T) {
 		resp := map[string]interface{}{
 			"bsvalias": "1.0",
 			"capabilities": map[string]interface{}{
-				"some-pki-endpoint":             "https://example.com/pki/{alias}@{domain.tld}",
-				"public-profile-v2":             "https://example.com/profile/{alias}@{domain.tld}",
-				"verify-pubkey-implementation":  "https://example.com/verify/{alias}@{domain.tld}",
+				"some-pki-endpoint":            "https://example.com/pki/{alias}@{domain.tld}",
+				"public-profile-v2":            "https://example.com/profile/{alias}@{domain.tld}",
+				"verify-pubkey-implementation": "https://example.com/verify/{alias}@{domain.tld}",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -197,7 +197,7 @@ func TestResolveEndpoints_TrailingDotRemoval(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDefaultDNSResolver_ImplementsInterface(t *testing.T) {
-	var _ DNSResolver = DefaultDNSResolver
+	var _ = DefaultDNSResolver
 	var _ DNSResolver = &defaultDNSResolver{}
 }
 
