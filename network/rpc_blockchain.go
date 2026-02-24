@@ -80,6 +80,12 @@ func ParseBIP37MerkleBlock(data []byte, targetTxID []byte) (header []byte, txInd
 	}
 	pos += bytesRead
 
+	// Validate hash count against remaining data to prevent OOM from malformed responses.
+	remainingBytes := uint64(len(data) - pos)
+	if numHashes > remainingBytes/32 {
+		return nil, 0, nil, 0, fmt.Errorf("hash count %d exceeds available data (%d bytes remaining)", numHashes, remainingBytes)
+	}
+
 	// Read the hashes.
 	hashes := make([][]byte, numHashes)
 	for i := uint64(0); i < numHashes; i++ {
