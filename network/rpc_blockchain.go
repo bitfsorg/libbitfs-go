@@ -26,7 +26,7 @@ func btcToSat(btc float64) uint64 {
 func parseCMerkleBlock(txid string, data []byte) (*MerkleProof, error) {
 	txidBytes, err := hex.DecodeString(txid)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid txid hex: %v", ErrInvalidResponse, err)
+		return nil, fmt.Errorf("%w: invalid txid hex: %w", ErrInvalidResponse, err)
 	}
 	if len(txidBytes) != 32 {
 		return nil, fmt.Errorf("%w: txid must be 32 bytes, got %d", ErrInvalidResponse, len(txidBytes))
@@ -37,7 +37,7 @@ func parseCMerkleBlock(txid string, data []byte) (*MerkleProof, error) {
 
 	headerBytes, txIndex, branches, _, err := ParseBIP37MerkleBlock(data, targetTxID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidResponse, err)
 	}
 
 	// Compute block hash in display hex (reversed double-SHA256 of header).
@@ -186,11 +186,17 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 		if left.found {
 			result.found = true
 			result.index = left.index
-			result.branch = append(left.branch, right.hash)
+			branch := make([][]byte, len(left.branch)+1)
+			copy(branch, left.branch)
+			branch[len(left.branch)] = right.hash
+			result.branch = branch
 		} else if right.found {
 			result.found = true
 			result.index = right.index
-			result.branch = append(right.branch, left.hash)
+			branch := make([][]byte, len(right.branch)+1)
+			copy(branch, right.branch)
+			branch[len(right.branch)] = left.hash
+			result.branch = branch
 		}
 
 		return result

@@ -43,7 +43,7 @@ func OpenBoltStore(dbPath string) (*BoltStore, error) {
 		return nil
 	})
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("spv: create buckets: %w", err)
 	}
 

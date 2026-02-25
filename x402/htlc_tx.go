@@ -278,7 +278,7 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	}
 
 	// Estimate claim tx size: ~10 overhead + ~(73+33+32+1) unlocking + script + ~40 output.
-	estSize := uint64(10 + 73 + 33 + 32 + 1 + uint64(len(params.HTLCScript)) + 40)
+	estSize := 10 + 73 + 33 + 32 + 1 + uint64(len(params.HTLCScript)) + 40
 	estFee := estSize * feeRate
 
 	if params.FundingAmount <= estFee {
@@ -383,7 +383,7 @@ func BuildSellerPreSignedRefund(params *SellerPreSignParams) (*SellerPreSignResu
 
 	// Estimate refund tx size: ~10 overhead + ~(1 + 73 + 73 + 1) unlocking
 	// (OP_0 + two sigs + OP_FALSE) + script + ~40 output.
-	estSize := uint64(10 + 1 + 73 + 73 + 1 + uint64(len(params.HTLCScript)) + 40)
+	estSize := 10 + 1 + 73 + 73 + 1 + uint64(len(params.HTLCScript)) + 40
 	estFee := estSize * feeRate
 
 	if params.FundingAmount <= estFee {

@@ -96,13 +96,13 @@ func (c *RPCClient) Call(ctx context.Context, method string, params []interface{
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+		return fmt.Errorf("%w: %w", ErrConnectionFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var rpcResp rpcResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return fmt.Errorf("%w: decode response: %v", ErrInvalidResponse, err)
+		return fmt.Errorf("%w: decode response: %w", ErrInvalidResponse, err)
 	}
 
 	if rpcResp.Error != nil {
@@ -111,7 +111,7 @@ func (c *RPCClient) Call(ctx context.Context, method string, params []interface{
 
 	if result != nil && rpcResp.Result != nil {
 		if err := json.Unmarshal(rpcResp.Result, result); err != nil {
-			return fmt.Errorf("%w: unmarshal result: %v", ErrInvalidResponse, err)
+			return fmt.Errorf("%w: unmarshal result: %w", ErrInvalidResponse, err)
 		}
 	}
 

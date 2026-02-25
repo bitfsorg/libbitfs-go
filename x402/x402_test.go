@@ -405,7 +405,6 @@ func TestBuildHTLC_ContainsBuyerPubKey(t *testing.T) {
 	assert.True(t, found, "buyer pubkey not found in HTLC script")
 }
 
-
 // --- ParseHTLCPreimage Tests ---
 
 func TestParseHTLCPreimage_EmptyTx(t *testing.T) {

@@ -36,8 +36,8 @@ type BatchNodeOp struct {
 
 // MutationBatch collects multiple node operations into a single TX.
 type MutationBatch struct {
-	ops       []BatchNodeOp
-	feeInputs []*UTXO
+	ops        []BatchNodeOp
+	feeInputs  []*UTXO
 	changeAddr []byte
 	feeRate    uint64
 }
@@ -90,7 +90,7 @@ func (b *MutationBatch) SetFeeRate(rate uint64) {
 //
 //	For each op:
 //	  [i]   OP_RETURN [MetaFlag, P_node, ParentTxID, Payload]
-//	  [i+1] P2PKH -> P_node (546 sat)
+//	  [i+1] P2PKH -> P_node (1 sat)
 //	[last] P2PKH -> Change
 //
 // Inputs:
