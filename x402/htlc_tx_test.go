@@ -413,6 +413,98 @@ func TestBuildBuyerRefundTx(t *testing.T) {
 	})
 }
 
+func TestBuildBuyerRefundTx_FundingVerification(t *testing.T) {
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
+	sellerAddr := sellerPriv.PubKey().Hash()
+	buyerAddr := buyerPriv.PubKey().Hash()
+
+	htlcScript, err := BuildHTLC(&HTLCParams{
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash,
+		Amount:       1000,
+		Timeout:      144,
+	})
+	require.NoError(t, err)
+
+	mockTxID := sha256.Sum256([]byte("htlc-funding-txid"))
+
+	// Get the seller's pre-signed refund.
+	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+		FundingTxID:     mockTxID[:],
+		FundingVout:     0,
+		FundingAmount:   1000,
+		HTLCScript:      htlcScript,
+		SellerPrivKey:   sellerPriv,
+		BuyerOutputAddr: buyerAddr,
+		Timeout:         144,
+		FeeRate:         1,
+	})
+	require.NoError(t, err)
+
+	t.Run("correct FundingTxID passes", func(t *testing.T) {
+		refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			SellerPreSignedTx: preSign.TxBytes,
+			SellerSig:         preSign.SellerSig,
+			HTLCScript:        htlcScript,
+			FundingAmount:     1000,
+			BuyerPrivKey:      buyerPriv,
+			FundingTxID:       mockTxID[:],
+			FundingVout:       0,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, refundTx)
+	})
+
+	t.Run("nil FundingTxID skips check", func(t *testing.T) {
+		refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			SellerPreSignedTx: preSign.TxBytes,
+			SellerSig:         preSign.SellerSig,
+			HTLCScript:        htlcScript,
+			FundingAmount:     1000,
+			BuyerPrivKey:      buyerPriv,
+			// FundingTxID not set — should skip verification.
+		})
+		require.NoError(t, err)
+		require.NotNil(t, refundTx)
+	})
+
+	t.Run("wrong FundingTxID rejected", func(t *testing.T) {
+		wrongTxID := bytes.Repeat([]byte{0xff}, 32)
+
+		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			SellerPreSignedTx: preSign.TxBytes,
+			SellerSig:         preSign.SellerSig,
+			HTLCScript:        htlcScript,
+			FundingAmount:     1000,
+			BuyerPrivKey:      buyerPriv,
+			FundingTxID:       wrongTxID,
+			FundingVout:       0,
+		})
+		assert.ErrorIs(t, err, ErrFundingMismatch)
+	})
+
+	t.Run("wrong FundingVout rejected", func(t *testing.T) {
+		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			SellerPreSignedTx: preSign.TxBytes,
+			SellerSig:         preSign.SellerSig,
+			HTLCScript:        htlcScript,
+			FundingAmount:     1000,
+			BuyerPrivKey:      buyerPriv,
+			FundingTxID:       mockTxID[:], // correct TxID
+			FundingVout:       99,          // wrong vout
+		})
+		assert.ErrorIs(t, err, ErrFundingMismatch)
+	})
+}
+
 // TestHTLCRoundTrip tests the full HTLC lifecycle in memory:
 // encrypt -> invoice -> build funding tx -> verify funding -> build claim -> extract preimage -> decrypt
 func TestHTLCRoundTrip(t *testing.T) {

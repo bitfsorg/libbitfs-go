@@ -29,4 +29,8 @@ var (
 
 	// ErrMissingHeaders indicates required x402 payment headers are missing.
 	ErrMissingHeaders = errors.New("x402: missing payment headers")
+
+	// ErrFundingMismatch indicates the pre-signed refund tx references a different
+	// HTLC funding UTXO than the buyer expected.
+	ErrFundingMismatch = errors.New("x402: funding UTXO mismatch")
 )

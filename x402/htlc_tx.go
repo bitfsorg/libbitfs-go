@@ -79,6 +79,8 @@ type BuyerRefundParams struct {
 	HTLCScript        []byte         // HTLC locking script bytes
 	FundingAmount     uint64         // HTLC output amount (for sighash computation)
 	BuyerPrivKey      *ec.PrivateKey // Signs the refund (buyer's half of 2-of-2)
+	FundingTxID       []byte         // Expected HTLC funding TxID (32 bytes); nil skips check
+	FundingVout       uint32         // Expected HTLC funding output index
 }
 
 // defaultHTLCFeeRate is the default fee rate for HTLC transactions.
@@ -474,6 +476,19 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 
 	if len(tx.Inputs) == 0 {
 		return nil, fmt.Errorf("%w: pre-signed tx has no inputs", ErrInvalidTx)
+	}
+
+	// Verify the pre-signed tx references the expected HTLC funding UTXO.
+	if len(params.FundingTxID) > 0 {
+		inputTxID := tx.Inputs[0].SourceTXID[:]
+		if !bytes.Equal(inputTxID, params.FundingTxID) {
+			return nil, fmt.Errorf("%w: input references %x, expected %x",
+				ErrFundingMismatch, inputTxID, params.FundingTxID)
+		}
+		if tx.Inputs[0].SourceTxOutIndex != params.FundingVout {
+			return nil, fmt.Errorf("%w: input vout %d, expected %d",
+				ErrFundingMismatch, tx.Inputs[0].SourceTxOutIndex, params.FundingVout)
+		}
 	}
 
 	// Re-attach source tx output for sighash computation (not preserved in serialization).

@@ -519,6 +519,26 @@ func TestGetUTXOSpent(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTxNotFound)
 }
 
+func TestTraversePartialMerkleTree_HugeTotalTxs(t *testing.T) {
+	// totalTxs = MaxUint32 should be rejected to prevent OOM.
+	hashes := [][]byte{make([]byte, 32)}
+	flags := []byte{0xFF}
+	target := make([]byte, 32)
+
+	_, _, err := traversePartialMerkleTree(hashes, flags, 0xFFFFFFFF, target)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestTraversePartialMerkleTree_ZeroTotalTxs(t *testing.T) {
+	hashes := [][]byte{make([]byte, 32)}
+	flags := []byte{0xFF}
+	target := make([]byte, 32)
+
+	_, _, err := traversePartialMerkleTree(hashes, flags, 0, target)
+	assert.Error(t, err)
+}
+
 func TestRPCClientImplementsBlockchainService(t *testing.T) {
 	// Compile-time interface check
 	var _ BlockchainService = (*RPCClient)(nil)

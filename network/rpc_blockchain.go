@@ -118,9 +118,20 @@ func ParseBIP37MerkleBlock(data []byte, targetTxID []byte) (header []byte, txInd
 	return header, txIndex, branches, totalTxs, nil
 }
 
+// maxMerkleTreeTxs is the upper bound on totalTxs accepted by traversePartialMerkleTree.
+// 1M transactions covers any realistic block and prevents OOM from malformed data.
+const maxMerkleTreeTxs = 1 << 20
+
 // traversePartialMerkleTree walks the BIP37 partial Merkle tree structure and
 // extracts the branch nodes needed for a standard Merkle proof of the target tx.
 func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint32, targetTxID []byte) (txIndex uint32, branch [][]byte, err error) {
+	if totalTxs == 0 {
+		return 0, nil, fmt.Errorf("totalTxs is zero")
+	}
+	if totalTxs > maxMerkleTreeTxs {
+		return 0, nil, fmt.Errorf("totalTxs %d exceeds maximum %d", totalTxs, maxMerkleTreeTxs)
+	}
+
 	height := uint32(0)
 	for calcTreeWidth(totalTxs, height) > 1 {
 		height++
