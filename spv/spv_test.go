@@ -52,11 +52,18 @@ func buildTestHeader(height uint32, prevBlock, merkleRoot []byte) *BlockHeader {
 		PrevBlock:  prevBlock,
 		MerkleRoot: merkleRoot,
 		Timestamp:  1700000000,
-		Bits:       0x1d00ffff,
-		Nonce:      12345,
+		Bits:       0x207fffff, // Regtest target: easy PoW
+		Nonce:      0,
 		Height:     height,
 	}
-	h.Hash = ComputeHeaderHash(h)
+	// Mine a valid nonce for PoW validation.
+	for nonce := uint32(0); ; nonce++ {
+		h.Nonce = nonce
+		h.Hash = ComputeHeaderHash(h)
+		if VerifyPoW(h) == nil {
+			break
+		}
+	}
 	return h
 }
 
@@ -533,6 +540,72 @@ func TestVerifyHeaderChain_NilHeader(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNilParam)
 }
 
+// --- VerifyPoW tests ---
+
+func TestCompactToTarget_Regtest(t *testing.T) {
+	// 0x207fffff: exponent=32, mantissa=0x7fffff
+	// Target should be 0x7fffff followed by 29 zero bytes.
+	target := CompactToTarget(0x207fffff)
+	assert.Equal(t, byte(0x7f), target[0])
+	assert.Equal(t, byte(0xff), target[1])
+	assert.Equal(t, byte(0xff), target[2])
+	for i := 3; i < 32; i++ {
+		assert.Equal(t, byte(0), target[i], "byte %d", i)
+	}
+}
+
+func TestCompactToTarget_MainnetGenesis(t *testing.T) {
+	// 0x1d00ffff: exponent=29, mantissa=0x00ffff
+	// Target = 0x00ffff << (8*(29-3)) = 0x00ffff at bytes [3..5] (big-endian offset 32-29=3)
+	target := CompactToTarget(0x1d00ffff)
+	assert.Equal(t, byte(0x00), target[0])
+	assert.Equal(t, byte(0x00), target[1])
+	assert.Equal(t, byte(0x00), target[2])
+	assert.Equal(t, byte(0x00), target[3])
+	assert.Equal(t, byte(0xff), target[4])
+	assert.Equal(t, byte(0xff), target[5])
+}
+
+func TestVerifyPoW_ValidHeader(t *testing.T) {
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  make([]byte, 32),
+		MerkleRoot: make([]byte, 32),
+		Timestamp:  1231006505,
+		Bits:       0x207fffff, // Regtest: easiest valid target
+		Nonce:      0,
+	}
+	// Find a valid nonce (regtest target is very easy).
+	for nonce := uint32(0); nonce < 1000000; nonce++ {
+		h.Nonce = nonce
+		h.Hash = ComputeHeaderHash(h)
+		if err := VerifyPoW(h); err == nil {
+			break
+		}
+	}
+	require.NoError(t, VerifyPoW(h))
+}
+
+func TestVerifyPoW_InvalidNonce(t *testing.T) {
+	// Target 0x03000001: extremely low target (essentially 1 byte).
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  make([]byte, 32),
+		MerkleRoot: make([]byte, 32),
+		Timestamp:  1231006505,
+		Bits:       0x03000001, // Extremely low target
+		Nonce:      42,
+	}
+	h.Hash = ComputeHeaderHash(h)
+	err := VerifyPoW(h)
+	require.ErrorIs(t, err, ErrInsufficientPoW)
+}
+
+func TestVerifyPoW_NilHeader(t *testing.T) {
+	err := VerifyPoW(nil)
+	assert.ErrorIs(t, err, ErrNilParam)
+}
+
 // --- VerifyTransaction tests ---
 
 func TestVerifyTransaction_Valid(t *testing.T) {
@@ -963,14 +1036,21 @@ func TestVerifyHeaderChain_EmptyHashAutoRecompute(t *testing.T) {
 		PrevBlock:  makeHash(0x00),
 		MerkleRoot: makeHash(0x11),
 		Timestamp:  1700000000,
-		Bits:       0x1d00ffff,
-		Nonce:      12345,
+		Bits:       0x207fffff, // Regtest target
+		Nonce:      0,
 		Height:     1,
-		Hash:       nil, // intentionally nil
 	}
-
-	// Compute what the hash should be for building h2's PrevBlock
-	expectedHash := ComputeHeaderHash(h1)
+	// Mine a valid nonce then clear Hash to test auto-recompute.
+	for nonce := uint32(0); ; nonce++ {
+		h1.Nonce = nonce
+		h1.Hash = ComputeHeaderHash(h1)
+		if VerifyPoW(h1) == nil {
+			break
+		}
+	}
+	expectedHash := make([]byte, 32)
+	copy(expectedHash, h1.Hash)
+	h1.Hash = nil // intentionally nil
 
 	h2 := buildTestHeader(2, expectedHash, makeHash(0x22))
 

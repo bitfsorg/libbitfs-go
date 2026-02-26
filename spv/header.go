@@ -79,6 +79,63 @@ func ComputeHeaderHash(h *BlockHeader) []byte {
 	return DoubleHash(raw)
 }
 
+// CompactToTarget converts a Bitcoin "compact" (nBits) representation to a 32-byte
+// big-endian target value. Format: 0xEEMMMMMM where EE=exponent, MMMMMM=mantissa.
+func CompactToTarget(bits uint32) []byte {
+	exponent := bits >> 24
+	mantissa := bits & 0x007fffff
+	// Negative flag (bit 23 of mantissa) — treat as zero target.
+	if bits&0x00800000 != 0 {
+		mantissa = 0
+	}
+
+	target := make([]byte, 32)
+	if exponent <= 3 {
+		mantissa >>= 8 * (3 - exponent)
+		target[31] = byte(mantissa)
+		target[30] = byte(mantissa >> 8)
+		target[29] = byte(mantissa >> 16)
+	} else {
+		pos := 32 - int(exponent)
+		if pos >= 0 && pos < 32 {
+			target[pos] = byte(mantissa >> 16)
+		}
+		if pos+1 >= 0 && pos+1 < 32 {
+			target[pos+1] = byte(mantissa >> 8)
+		}
+		if pos+2 >= 0 && pos+2 < 32 {
+			target[pos+2] = byte(mantissa)
+		}
+	}
+	return target
+}
+
+// VerifyPoW checks that a block header's hash meets its stated difficulty target.
+// The header hash (double-SHA256 output, big-endian as 256-bit integer) must be
+// numerically <= the target derived from Bits.
+func VerifyPoW(h *BlockHeader) error {
+	if h == nil {
+		return fmt.Errorf("%w: header", ErrNilParam)
+	}
+	hash := h.Hash
+	if len(hash) == 0 {
+		hash = ComputeHeaderHash(h)
+	}
+	target := CompactToTarget(h.Bits)
+
+	// Compare hash vs target byte-by-byte in big-endian order (MSB first).
+	// SHA256 output is naturally big-endian.
+	for i := 0; i < 32; i++ {
+		if hash[i] < target[i] {
+			return nil // hash < target → valid
+		}
+		if hash[i] > target[i] {
+			return fmt.Errorf("%w: hash exceeds target", ErrInsufficientPoW)
+		}
+	}
+	return nil // hash == target → valid
+}
+
 // VerifyHeaderChain checks that a sequence of headers forms a valid chain.
 // Each header's PrevBlock must match the previous header's Hash.
 // Headers must be provided in ascending order (index 0 is earliest).
@@ -86,8 +143,13 @@ func VerifyHeaderChain(headers []*BlockHeader) error {
 	if len(headers) == 0 {
 		return nil
 	}
-	if len(headers) == 1 {
-		return nil
+
+	// Validate PoW for the first header.
+	if headers[0] == nil {
+		return fmt.Errorf("%w: nil header at index 0", ErrNilParam)
+	}
+	if err := VerifyPoW(headers[0]); err != nil {
+		return fmt.Errorf("header 0: %w", err)
 	}
 
 	for i := 1; i < len(headers); i++ {
@@ -116,6 +178,11 @@ func VerifyHeaderChain(headers []*BlockHeader) error {
 			if curr.PrevBlock[j] != prevHash[j] {
 				return fmt.Errorf("%w: header %d PrevBlock does not match header %d hash", ErrChainBroken, i, i-1)
 			}
+		}
+
+		// Validate PoW for each subsequent header.
+		if err := VerifyPoW(curr); err != nil {
+			return fmt.Errorf("header %d: %w", i, err)
 		}
 	}
 
