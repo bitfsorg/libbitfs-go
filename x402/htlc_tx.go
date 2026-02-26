@@ -332,7 +332,7 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	}
 
 	// Build unlocking script: <sig+flag> <seller_pubkey> <capsule> OP_TRUE
-	sigBytes := append(sig.Serialize(), byte(sighash.AllForkID))
+	sigBytes := appendSighashFlag(sig.Serialize())
 	sellerPubKey := params.SellerPrivKey.PubKey().Compressed()
 
 	unlockScript := &script.Script{}
@@ -438,7 +438,7 @@ func BuildSellerPreSignedRefund(params *SellerPreSignParams) (*SellerPreSignResu
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 
-	sellerSigBytes := append(sig.Serialize(), byte(sighash.AllForkID))
+	sellerSigBytes := appendSighashFlag(sig.Serialize())
 
 	return &SellerPreSignResult{
 		TxBytes:   tx.Bytes(),
@@ -509,7 +509,7 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 
-	buyerSigBytes := append(sig.Serialize(), byte(sighash.AllForkID))
+	buyerSigBytes := appendSighashFlag(sig.Serialize())
 
 	// Build unlocking script: OP_0 <buyer_sig> <seller_sig> OP_FALSE
 	// OP_0 is the dummy element required by CHECKMULTISIG.
@@ -531,6 +531,15 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 	tx.Inputs[0].UnlockingScript = unlockScript
 
 	return tx, nil
+}
+
+// appendSighashFlag safely appends a sighash type flag to a DER-encoded
+// signature without mutating the original slice.
+func appendSighashFlag(sigDER []byte) []byte {
+	result := make([]byte, len(sigDER)+1)
+	copy(result, sigDER)
+	result[len(sigDER)] = byte(sighash.AllForkID)
+	return result
 }
 
 // buildP2PKHLockScript creates a P2PKH locking script from a 20-byte public key hash.

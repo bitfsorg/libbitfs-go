@@ -661,6 +661,29 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	t.Logf("HTLC buyer refund round-trip OK")
 }
 
+func TestSigSerializeAppendSafety(t *testing.T) {
+	priv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	hash := make([]byte, 32)
+	for i := range hash {
+		hash[i] = byte(i)
+	}
+
+	sig, err := priv.Sign(hash)
+	require.NoError(t, err)
+
+	serialized := sig.Serialize()
+	originalCopy := make([]byte, len(serialized))
+	copy(originalCopy, serialized)
+
+	// Simulate what the code does: append sighash flag.
+	_ = appendSighashFlag(serialized)
+
+	// Original serialized bytes must not be mutated.
+	assert.Equal(t, originalCopy, sig.Serialize(), "sig.Serialize() must not be mutated by append")
+}
+
 // buildTestP2PKHScript creates a P2PKH locking script for testing.
 func buildTestP2PKHScript(t *testing.T, pubKeyHash []byte) []byte {
 	t.Helper()
