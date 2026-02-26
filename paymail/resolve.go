@@ -38,6 +38,10 @@ type wellKnownResponse struct {
 	Capabilities map[string]interface{} `json:"capabilities"`
 }
 
+// MaxPaymailResponseSize is the maximum allowed response body size for Paymail
+// HTTP requests (1 MB). This prevents memory exhaustion from malicious servers.
+const MaxPaymailResponseSize = 1 << 20
+
 // Known Paymail capability URNs.
 const (
 	capPKI           = "pki"
@@ -72,7 +76,7 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPaymailDiscovery, url, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxPaymailResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading response: %w", ErrPaymailDiscovery, err)
 	}
@@ -139,7 +143,7 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPKIResolution, pkiURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxPaymailResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading response: %w", ErrPKIResolution, err)
 	}

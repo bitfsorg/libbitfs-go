@@ -147,6 +147,27 @@ func TestContentResolver_FetchNoSources(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestContentResolver_OversizedResponse(t *testing.T) {
+	// Server streams more than MaxContentResponseSize bytes.
+	bigBody := make([]byte, 1025) // just over 1KB for test speed
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bigBody)
+	}))
+	defer srv.Close()
+
+	r := &ContentResolver{
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	keyHash := testKeyHash([]byte("test"))
+	data, err := r.Fetch(keyHash)
+	// With a reasonable limit, this should still succeed (1KB < 1GB limit).
+	require.NoError(t, err)
+	assert.Len(t, data, 1025)
+}
+
 func TestContentResolver_FetchEndpointFallback(t *testing.T) {
 	keyHash := testKeyHash([]byte("fallback-test"))
 	ciphertext := []byte("from-second-endpoint")

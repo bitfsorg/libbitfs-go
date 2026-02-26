@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// MaxContentResponseSize is the maximum allowed response body size for content
+// fetches (1 GB). This prevents memory exhaustion from malicious endpoints.
+const MaxContentResponseSize = 1 << 30
+
 // ContentResolver fetches encrypted content by key_hash from multiple sources
 // in priority order: local FileStore -> daemon HTTP endpoints.
 // It returns ciphertext only; the caller is responsible for decryption.
@@ -87,7 +91,7 @@ func (r *ContentResolver) fetchFromEndpoint(client *http.Client, baseURL, hashHe
 		return nil, fmt.Errorf("resolver: endpoint %s: HTTP %d", baseURL, resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxContentResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("resolver: endpoint %s: read body: %w", baseURL, err)
 	}

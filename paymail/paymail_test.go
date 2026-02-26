@@ -1,9 +1,11 @@
 package paymail
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -901,6 +903,41 @@ type errorHTTPClient struct {
 
 func (e *errorHTTPClient) Get(url string) (*http.Response, error) {
 	return nil, e.err
+}
+
+// responseMockHTTPClient returns pre-built responses keyed by URL.
+type responseMockHTTPClient struct {
+	responses map[string]*http.Response
+}
+
+func (m *responseMockHTTPClient) Get(url string) (*http.Response, error) {
+	resp, ok := m.responses[url]
+	if !ok {
+		return nil, fmt.Errorf("no mock response for %s", url)
+	}
+	return resp, nil
+}
+
+func TestDiscoverCapabilities_OversizedResponse(t *testing.T) {
+	// Server returns a response larger than MaxPaymailResponseSize.
+	bigBody := make([]byte, MaxPaymailResponseSize+1)
+	for i := range bigBody {
+		bigBody[i] = 'x'
+	}
+
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(bigBody)),
+			},
+		},
+	}
+
+	_, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	// Should fail with JSON parse error since body is truncated garbage
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing JSON")
 }
 
 func mustDecodeHex(s string) []byte {
