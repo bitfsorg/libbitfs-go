@@ -539,6 +539,18 @@ func TestTraversePartialMerkleTree_ZeroTotalTxs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestTraversePartialMerkleTree_ExhaustedHashes(t *testing.T) {
+	target := make([]byte, 32)
+	target[0] = 0x42
+
+	// Claim 4 txs but only provide 1 hash — traversal needs more.
+	hashes := [][]byte{target}
+	flags := []byte{0xFF} // All interior nodes flagged
+
+	_, _, err := traversePartialMerkleTree(hashes, flags, 4, target)
+	assert.Error(t, err, "should fail when hash pool is exhausted")
+}
+
 func TestRPCClientImplementsBlockchainService(t *testing.T) {
 	// Compile-time interface check
 	var _ BlockchainService = (*RPCClient)(nil)

@@ -139,6 +139,7 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 
 	hashIdx := 0
 	bitIdx := 0
+	var hashErr error
 
 	getBit := func() bool {
 		if bitIdx/8 >= len(flagBytes) {
@@ -151,10 +152,15 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 
 	getHash := func() []byte {
 		if hashIdx >= len(hashes) {
-			return nil
+			hashErr = fmt.Errorf("merkle hash pool exhausted at index %d", hashIdx)
+			return make([]byte, 32) // Return zeros; caller checks hashErr.
 		}
 		h := hashes[hashIdx]
 		hashIdx++
+		if h == nil {
+			hashErr = fmt.Errorf("nil hash at index %d", hashIdx-1)
+			return make([]byte, 32)
+		}
 		return h
 	}
 
@@ -214,6 +220,9 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 	}
 
 	result := traverse(height, 0)
+	if hashErr != nil {
+		return 0, nil, hashErr
+	}
 	if !result.found {
 		return 0, nil, fmt.Errorf("target tx not found in partial merkle tree")
 	}
