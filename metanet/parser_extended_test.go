@@ -124,3 +124,58 @@ func TestSerializePayload_ExtendedFields_ZeroValues(t *testing.T) {
 		}
 	}
 }
+
+func TestSerializePayload_ISOConfig_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		iso  *ISOConfig
+	}{
+		{"open", &ISOConfig{
+			TotalShares: 10000, PricePerShare: 100,
+			CreatorAddr: bytes.Repeat([]byte{0xAB}, 20), Status: ISOStatusOpen,
+		}},
+		{"partial", &ISOConfig{
+			TotalShares: 1000000, PricePerShare: 1,
+			CreatorAddr: bytes.Repeat([]byte{0x01}, 20), Status: ISOStatusPartial,
+		}},
+		{"closed", &ISOConfig{
+			TotalShares: 100, PricePerShare: 50000,
+			CreatorAddr: bytes.Repeat([]byte{0xFF}, 20), Status: ISOStatusClosed,
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &Node{
+				Version:  1,
+				Type:     NodeTypeFile,
+				Metadata: make(map[string]string),
+				ISO:      tt.iso,
+			}
+
+			payload, err := SerializePayload(node)
+			require.NoError(t, err)
+
+			decoded := &Node{Metadata: make(map[string]string)}
+			err = deserializePayload(payload, decoded)
+			require.NoError(t, err)
+
+			require.NotNil(t, decoded.ISO)
+			assert.Equal(t, tt.iso.TotalShares, decoded.ISO.TotalShares)
+			assert.Equal(t, tt.iso.PricePerShare, decoded.ISO.PricePerShare)
+			assert.Equal(t, tt.iso.CreatorAddr, decoded.ISO.CreatorAddr)
+			assert.Equal(t, tt.iso.Status, decoded.ISO.Status)
+		})
+	}
+}
+
+func TestSerializePayload_ISOConfig_NilOmitted(t *testing.T) {
+	node := &Node{Version: 1, Type: NodeTypeFile, Metadata: make(map[string]string)}
+	payload, err := SerializePayload(node)
+	require.NoError(t, err)
+
+	decoded := &Node{Metadata: make(map[string]string)}
+	err = deserializePayload(payload, decoded)
+	require.NoError(t, err)
+	assert.Nil(t, decoded.ISO)
+}
