@@ -20,4 +20,7 @@ var (
 
 	// ErrInvalidBaseDir indicates the base directory path is invalid.
 	ErrInvalidBaseDir = errors.New("storage: invalid base directory")
+
+	// ErrUnsupportedCompression indicates an unsupported compression scheme.
+	ErrUnsupportedCompression = errors.New("storage: unsupported compression scheme")
 )
