@@ -2071,6 +2071,54 @@ func TestFollowLink_TwoNodeCycle(t *testing.T) {
 		"two-node cycle A->B->A should be caught by depth counter")
 }
 
+// --- ResolvePath global link budget test ---
+
+func TestResolvePath_GlobalLinkBudget(t *testing.T) {
+	store := newMockStore()
+
+	rootPK := makePubKey(0x01)
+	root := makeRootDir(rootPK)
+
+	// Build a chain of 45 nested directories, where each directory entry
+	// is a link that resolves (single hop) to the actual directory.
+	// Each hop costs 1 link follow, totaling 45 > MaxTotalLinkFollows(40).
+	currentDir := root
+	for i := 0; i < 45; i++ {
+		// The actual directory node
+		dirPK := makePubKey(byte(0x10 + i))
+		dir := makeDirNode(dirPK, currentDir.PNode, makeTxID(byte(0x50+i)))
+		store.addNode(dir)
+
+		// A link node that points to the actual directory
+		linkPK := makePubKey(byte(0xB0 + i))
+		link := makeLinkNode(linkPK, dirPK, LinkTypeSoft)
+		link.TxID = makeTxID(byte(0xD0 + i))
+		store.addNode(link)
+
+		// Add the link as a child of the current directory
+		name := fmt.Sprintf("d%d", i)
+		currentDir.Children = append(currentDir.Children, ChildEntry{
+			Index:  uint32(i),
+			Name:   name,
+			Type:   NodeTypeLink,
+			PubKey: linkPK,
+		})
+		currentDir.NextChildIndex = uint32(i + 1)
+
+		currentDir = dir
+	}
+
+	// Build path: d0/d1/d2/...d44
+	path := make([]string, 45)
+	for i := 0; i < 45; i++ {
+		path[i] = fmt.Sprintf("d%d", i)
+	}
+
+	_, err := ResolvePath(store, root, path)
+	assert.ErrorIs(t, err, ErrTotalLinkBudgetExceeded,
+		"path with 45 link follows should exceed global budget of 40")
+}
+
 // --- validateChildName control character tests ---
 
 func TestValidateChildName_RejectsControlChars(t *testing.T) {

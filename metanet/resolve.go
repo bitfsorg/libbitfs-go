@@ -16,6 +16,15 @@ type ResolveResult struct {
 // MaxPathComponents is the maximum number of components allowed in a path resolution.
 const MaxPathComponents = 256
 
+// MaxTotalLinkFollows is the global budget for total link follows across an
+// entire ResolvePath call. Each individual FollowLink call is bounded by
+// MaxLinkDepth, but the total across all components is bounded here.
+const MaxTotalLinkFollows = 40
+
+// ErrTotalLinkBudgetExceeded indicates the total number of link follows
+// across the entire path resolution exceeded MaxTotalLinkFollows.
+var ErrTotalLinkBudgetExceeded = fmt.Errorf("total link follow budget exceeded (%d)", MaxTotalLinkFollows)
+
 // ResolvePath resolves a filesystem path starting from a root node.
 // Handles directory traversal, soft link following (max depth 10),
 // and "." / ".." navigation. ".." cannot escape above the root.
@@ -57,6 +66,7 @@ func ResolvePath(store NodeStore, root *Node, pathComponents []string) (*Resolve
 	current := root
 	var currentEntry *ChildEntry
 	var resolvedPath []string
+	totalLinkFollows := 0
 
 	for _, component := range pathComponents {
 		switch component {
@@ -100,12 +110,23 @@ func ResolvePath(store NodeStore, root *Node, pathComponents []string) (*Resolve
 			return nil, fmt.Errorf("%w: child %q", ErrNodeNotFound, component)
 		}
 
-		// Follow links if needed
+		// Follow links if needed, tracking against global budget
 		resolvedNode := childNode
 		if resolvedNode.Type == NodeTypeLink {
-			resolved, err := FollowLink(store, resolvedNode, MaxLinkDepth)
+			remaining := MaxLinkDepth
+			if MaxTotalLinkFollows-totalLinkFollows < remaining {
+				remaining = MaxTotalLinkFollows - totalLinkFollows
+			}
+			if remaining <= 0 {
+				return nil, ErrTotalLinkBudgetExceeded
+			}
+			resolved, hops, err := followLinkCounted(store, resolvedNode, remaining)
 			if err != nil {
 				return nil, err
+			}
+			totalLinkFollows += hops
+			if totalLinkFollows > MaxTotalLinkFollows {
+				return nil, ErrTotalLinkBudgetExceeded
 			}
 			resolvedNode = resolved
 		}
@@ -132,6 +153,44 @@ func ResolvePath(store NodeStore, root *Node, pathComponents []string) (*Resolve
 		Parent: parentNode,
 		Path:   resolvedPath,
 	}, nil
+}
+
+// followLinkCounted resolves a soft link chain, returning the resolved node
+// and the number of link hops taken. maxHops limits the maximum hops allowed.
+func followLinkCounted(store NodeStore, linkNode *Node, maxHops int) (*Node, int, error) {
+	if linkNode.Type != NodeTypeLink {
+		return linkNode, 0, nil
+	}
+
+	current := linkNode
+	hops := 0
+	for hops < maxHops {
+		if current.Type != NodeTypeLink {
+			return current, hops, nil
+		}
+		if current.LinkType == LinkTypeSoftRemote {
+			return nil, hops, fmt.Errorf("%w: target=%s", ErrRemoteLinkNotSupported, current.Domain)
+		}
+		if len(current.LinkTarget) == 0 {
+			return nil, hops, fmt.Errorf("%w: link has no target", ErrNodeNotFound)
+		}
+
+		target, err := store.GetNodeByPubKey(current.LinkTarget)
+		if err != nil {
+			return nil, hops, fmt.Errorf("%w: %w", ErrNodeNotFound, err)
+		}
+		if target == nil {
+			return nil, hops, fmt.Errorf("%w: link target not found", ErrNodeNotFound)
+		}
+
+		hops++
+		current = target
+	}
+
+	if current.Type == NodeTypeLink {
+		return nil, hops, ErrLinkDepthExceeded
+	}
+	return current, hops, nil
 }
 
 // SplitPath splits a path string into components.
