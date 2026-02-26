@@ -1301,9 +1301,9 @@ func TestDeserializePayload_Empty(t *testing.T) {
 }
 
 func TestDeserializePayload_UnknownTag(t *testing.T) {
-	// Build a payload with unknown tag 0xFF
+	// Build a payload with unknown tag 0xFF (varint length)
 	var buf []byte
-	buf = append(buf, 0xFF, 2, 0, 0x01, 0x02) // tag=0xFF, len=2, data=0x01,0x02
+	buf = append(buf, 0xFF, 0x02, 0x01, 0x02) // tag=0xFF, varint len=2, data=0x01,0x02
 	node := &Node{Metadata: make(map[string]string)}
 	err := deserializePayload(buf, node)
 	assert.NoError(t, err, "unknown tags should be skipped")
@@ -1311,10 +1311,25 @@ func TestDeserializePayload_UnknownTag(t *testing.T) {
 
 func TestDeserializePayload_Truncated(t *testing.T) {
 	// Tag present but value truncated
-	buf := []byte{tagVersion, 4, 0, 0x01} // says length 4 but only 1 byte of data
+	buf := []byte{tagVersion, 0x04, 0x01} // says varint length 4 but only 1 byte of data
 	node := &Node{Metadata: make(map[string]string)}
 	err := deserializePayload(buf, node)
 	assert.Error(t, err)
+}
+
+func TestDeserializePayload_RejectsHugeTLVLength(t *testing.T) {
+	// Craft a TLV with tag=0x01 (version) and a uvarint-encoded length
+	// that exceeds math.MaxInt when cast to int on 32-bit platforms.
+	buf := []byte{0x01} // tag
+	// Encode length = math.MaxUint64 as uvarint (10 bytes: 0xFF x9 + 0x01)
+	buf = append(buf, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01)
+	// Append a few bytes of "value" (far fewer than claimed length).
+	buf = append(buf, 0x00, 0x00, 0x00, 0x00)
+
+	node := &Node{}
+	err := deserializePayload(buf, node)
+	assert.Error(t, err, "should reject TLV length exceeding buffer")
+	assert.Contains(t, err.Error(), "truncated")
 }
 
 // --- Integration-style test: full workflow ---
@@ -1944,6 +1959,21 @@ func TestResolvePath_RootResult(t *testing.T) {
 	assert.Empty(t, result.Path, "root resolution should have empty Path")
 }
 
+func TestResolvePath_RejectsExcessiveDepth(t *testing.T) {
+	store := newMockStore()
+	root := makeRootDir(makePubKey(0x01))
+
+	// Build a path with 257 components -- exceeds MaxPathComponents.
+	components := make([]string, 257)
+	for i := range components {
+		components[i] = "a"
+	}
+
+	_, err := ResolvePath(store, root, components)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "too deep")
+}
+
 // TestValidateChildName_Unicode verifies that Unicode characters (Chinese, emoji)
 // are accepted as valid child names.
 func TestValidateChildName_Unicode(t *testing.T) {
@@ -1968,12 +1998,23 @@ func TestValidateChildName_Unicode(t *testing.T) {
 	}
 }
 
-// TestValidateChildName_LongName verifies that a very long name is accepted
-// (no length limit in current implementation).
-func TestValidateChildName_LongName(t *testing.T) {
-	longName := strings.Repeat("a", 1000)
-	err := validateChildName(longName)
-	assert.NoError(t, err, "long name should be accepted (no length limit in code)")
+// TestValidateChildName_RejectsLongName verifies that names exceeding MaxChildNameLen are rejected.
+func TestValidateChildName_RejectsLongName(t *testing.T) {
+	longName := strings.Repeat("a", 256)
+	dir := makeRootDir(makePubKey(0x01))
+	_, err := AddChild(dir, longName, NodeTypeFile, makePubKey(0x10), false)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidName)
+	assert.Contains(t, err.Error(), "too long")
+}
+
+// TestValidateChildName_Accepts255ByteName verifies that a 255-byte name is accepted.
+func TestValidateChildName_Accepts255ByteName(t *testing.T) {
+	name255 := strings.Repeat("b", 255)
+	dir := makeRootDir(makePubKey(0x01))
+	entry, err := AddChild(dir, name255, NodeTypeFile, makePubKey(0x10), false)
+	assert.NoError(t, err)
+	assert.Equal(t, name255, entry.Name)
 }
 
 // TestSplitPath_WhitespaceOnly verifies that SplitPath with whitespace-only
@@ -2028,6 +2069,85 @@ func TestFollowLink_TwoNodeCycle(t *testing.T) {
 	_, err := FollowLink(store, linkA, MaxLinkDepth)
 	assert.ErrorIs(t, err, ErrLinkDepthExceeded,
 		"two-node cycle A->B->A should be caught by depth counter")
+}
+
+// --- ResolvePath global link budget test ---
+
+func TestResolvePath_GlobalLinkBudget(t *testing.T) {
+	store := newMockStore()
+
+	rootPK := makePubKey(0x01)
+	root := makeRootDir(rootPK)
+
+	// Build a chain of 45 nested directories, where each directory entry
+	// is a link that resolves (single hop) to the actual directory.
+	// Each hop costs 1 link follow, totaling 45 > MaxTotalLinkFollows(40).
+	currentDir := root
+	for i := 0; i < 45; i++ {
+		// The actual directory node
+		dirPK := makePubKey(byte(0x10 + i))
+		dir := makeDirNode(dirPK, currentDir.PNode, makeTxID(byte(0x50+i)))
+		store.addNode(dir)
+
+		// A link node that points to the actual directory
+		linkPK := makePubKey(byte(0xB0 + i))
+		link := makeLinkNode(linkPK, dirPK, LinkTypeSoft)
+		link.TxID = makeTxID(byte(0xD0 + i))
+		store.addNode(link)
+
+		// Add the link as a child of the current directory
+		name := fmt.Sprintf("d%d", i)
+		currentDir.Children = append(currentDir.Children, ChildEntry{
+			Index:  uint32(i),
+			Name:   name,
+			Type:   NodeTypeLink,
+			PubKey: linkPK,
+		})
+		currentDir.NextChildIndex = uint32(i + 1)
+
+		currentDir = dir
+	}
+
+	// Build path: d0/d1/d2/...d44
+	path := make([]string, 45)
+	for i := 0; i < 45; i++ {
+		path[i] = fmt.Sprintf("d%d", i)
+	}
+
+	_, err := ResolvePath(store, root, path)
+	assert.ErrorIs(t, err, ErrTotalLinkBudgetExceeded,
+		"path with 45 link follows should exceed global budget of 40")
+}
+
+// --- validateChildName control character tests ---
+
+func TestValidateChildName_RejectsControlChars(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"tab", "foo\tbar", true},
+		{"newline", "foo\nbar", true},
+		{"carriage return", "foo\rbar", true},
+		{"escape", "foo\x1bbar", true},
+		{"unicode RTL override", "foo\u202ebar", true},
+		{"unicode LTR override", "foo\u202dbar", true},
+		{"unicode zero-width joiner", "foo\u200dbar", true},
+		{"valid ascii", "hello-world_123.txt", false},
+		{"valid unicode", "日本語ファイル.txt", false},
+		{"valid emoji", "📁data", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateChildName(tt.input)
+			if tt.wantErr {
+				assert.ErrorIs(t, err, ErrInvalidName)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 // =============================================================================

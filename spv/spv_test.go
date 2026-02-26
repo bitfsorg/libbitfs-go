@@ -52,11 +52,18 @@ func buildTestHeader(height uint32, prevBlock, merkleRoot []byte) *BlockHeader {
 		PrevBlock:  prevBlock,
 		MerkleRoot: merkleRoot,
 		Timestamp:  1700000000,
-		Bits:       0x1d00ffff,
-		Nonce:      12345,
+		Bits:       0x207fffff, // Regtest target: easy PoW
+		Nonce:      0,
 		Height:     height,
 	}
-	h.Hash = ComputeHeaderHash(h)
+	// Mine a valid nonce for PoW validation.
+	for nonce := uint32(0); ; nonce++ {
+		h.Nonce = nonce
+		h.Hash = ComputeHeaderHash(h)
+		if VerifyPoW(h) == nil {
+			break
+		}
+	}
 	return h
 }
 
@@ -461,14 +468,30 @@ func TestVerifyMerkleProof_InvalidTxIDLength(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidTxID)
 }
 
-func TestVerifyMerkleProof_EmptyNodes(t *testing.T) {
+func TestVerifyMerkleProof_SingleTxBlock(t *testing.T) {
+	// In a single-tx block, the tx hash IS the merkle root. Proof has zero nodes.
+	txHash := makeHash(0x42)
 	proof := &MerkleProof{
-		TxID:  makeHash(0x01),
+		TxID:  txHash,
+		Index: 0,
+		Nodes: nil, // No sibling nodes in a single-tx block
+	}
+	valid, err := VerifyMerkleProof(proof, txHash)
+	require.NoError(t, err)
+	assert.True(t, valid)
+}
+
+func TestVerifyMerkleProof_SingleTxBlock_Mismatch(t *testing.T) {
+	// Empty proof with wrong expected root should fail.
+	txHash := makeHash(0x42)
+	proof := &MerkleProof{
+		TxID:  txHash,
 		Index: 0,
 		Nodes: nil,
 	}
-	_, err := VerifyMerkleProof(proof, makeHash(0x00))
-	assert.ErrorIs(t, err, ErrEmptyProofNodes)
+	valid, err := VerifyMerkleProof(proof, makeHash(0xFF))
+	assert.ErrorIs(t, err, ErrMerkleProofInvalid)
+	assert.False(t, valid)
 }
 
 func TestVerifyMerkleProof_InvalidExpectedRootLength(t *testing.T) {
@@ -514,6 +537,72 @@ func TestVerifyHeaderChain_Single(t *testing.T) {
 func TestVerifyHeaderChain_NilHeader(t *testing.T) {
 	h1 := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
 	err := VerifyHeaderChain([]*BlockHeader{h1, nil})
+	assert.ErrorIs(t, err, ErrNilParam)
+}
+
+// --- VerifyPoW tests ---
+
+func TestCompactToTarget_Regtest(t *testing.T) {
+	// 0x207fffff: exponent=32, mantissa=0x7fffff
+	// Target should be 0x7fffff followed by 29 zero bytes.
+	target := CompactToTarget(0x207fffff)
+	assert.Equal(t, byte(0x7f), target[0])
+	assert.Equal(t, byte(0xff), target[1])
+	assert.Equal(t, byte(0xff), target[2])
+	for i := 3; i < 32; i++ {
+		assert.Equal(t, byte(0), target[i], "byte %d", i)
+	}
+}
+
+func TestCompactToTarget_MainnetGenesis(t *testing.T) {
+	// 0x1d00ffff: exponent=29, mantissa=0x00ffff
+	// Target = 0x00ffff << (8*(29-3)) = 0x00ffff at bytes [3..5] (big-endian offset 32-29=3)
+	target := CompactToTarget(0x1d00ffff)
+	assert.Equal(t, byte(0x00), target[0])
+	assert.Equal(t, byte(0x00), target[1])
+	assert.Equal(t, byte(0x00), target[2])
+	assert.Equal(t, byte(0x00), target[3])
+	assert.Equal(t, byte(0xff), target[4])
+	assert.Equal(t, byte(0xff), target[5])
+}
+
+func TestVerifyPoW_ValidHeader(t *testing.T) {
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  make([]byte, 32),
+		MerkleRoot: make([]byte, 32),
+		Timestamp:  1231006505,
+		Bits:       0x207fffff, // Regtest: easiest valid target
+		Nonce:      0,
+	}
+	// Find a valid nonce (regtest target is very easy).
+	for nonce := uint32(0); nonce < 1000000; nonce++ {
+		h.Nonce = nonce
+		h.Hash = ComputeHeaderHash(h)
+		if err := VerifyPoW(h); err == nil {
+			break
+		}
+	}
+	require.NoError(t, VerifyPoW(h))
+}
+
+func TestVerifyPoW_InvalidNonce(t *testing.T) {
+	// Target 0x03000001: extremely low target (essentially 1 byte).
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  make([]byte, 32),
+		MerkleRoot: make([]byte, 32),
+		Timestamp:  1231006505,
+		Bits:       0x03000001, // Extremely low target
+		Nonce:      42,
+	}
+	h.Hash = ComputeHeaderHash(h)
+	err := VerifyPoW(h)
+	require.ErrorIs(t, err, ErrInsufficientPoW)
+}
+
+func TestVerifyPoW_NilHeader(t *testing.T) {
+	err := VerifyPoW(nil)
 	assert.ErrorIs(t, err, ErrNilParam)
 }
 
@@ -918,6 +1007,37 @@ func TestVerifyTransaction_MerkleRootMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrMerkleProofInvalid)
 }
 
+func TestVerifyTransaction_InvalidPoW(t *testing.T) {
+	txHash := makeTxHash(0x42)
+	proof, merkleRoot := buildTestProof(txHash)
+
+	// Build header with valid structure but INVALID PoW (nonce=0, hard target).
+	header := &BlockHeader{
+		Version:    1,
+		PrevBlock:  makeHash(0x00),
+		MerkleRoot: merkleRoot,
+		Timestamp:  1700000000,
+		Bits:       0x01003456, // Impossibly hard target
+		Nonce:      0,
+		Height:     100,
+	}
+	header.Hash = ComputeHeaderHash(header)
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	err := headerStore.PutHeader(header)
+	require.NoError(t, err)
+
+	storedTx := &StoredTx{
+		TxID:        txHash,
+		Proof:       proof,
+		BlockHeight: 100,
+	}
+
+	err = VerifyTransaction(storedTx, headerStore)
+	assert.ErrorIs(t, err, ErrInsufficientPoW)
+}
+
 // --- Gap 4: VerifyHeaderChain -- invalid PrevBlock length ---
 
 func TestVerifyHeaderChain_InvalidPrevBlockLength(t *testing.T) {
@@ -947,14 +1067,21 @@ func TestVerifyHeaderChain_EmptyHashAutoRecompute(t *testing.T) {
 		PrevBlock:  makeHash(0x00),
 		MerkleRoot: makeHash(0x11),
 		Timestamp:  1700000000,
-		Bits:       0x1d00ffff,
-		Nonce:      12345,
+		Bits:       0x207fffff, // Regtest target
+		Nonce:      0,
 		Height:     1,
-		Hash:       nil, // intentionally nil
 	}
-
-	// Compute what the hash should be for building h2's PrevBlock
-	expectedHash := ComputeHeaderHash(h1)
+	// Mine a valid nonce then clear Hash to test auto-recompute.
+	for nonce := uint32(0); ; nonce++ {
+		h1.Nonce = nonce
+		h1.Hash = ComputeHeaderHash(h1)
+		if VerifyPoW(h1) == nil {
+			break
+		}
+	}
+	expectedHash := make([]byte, 32)
+	copy(expectedHash, h1.Hash)
+	h1.Hash = nil // intentionally nil
 
 	h2 := buildTestHeader(2, expectedHash, makeHash(0x22))
 
@@ -1150,7 +1277,7 @@ func TestVerifyMerkleProof_InvalidProofNodeLength(t *testing.T) {
 
 // --- Gap 13: PutTxWithPubKey -- overwrite existing (no duplicate error) ---
 
-func TestMemTxStore_PutWithPubKey_OverwriteExisting(t *testing.T) {
+func TestMemTxStore_PutWithPubKey_RejectsDuplicate(t *testing.T) {
 	store := NewMemTxStore()
 	pNode := makeHash(0xAA)
 
@@ -1162,14 +1289,14 @@ func TestMemTxStore_PutWithPubKey_OverwriteExisting(t *testing.T) {
 	err := store.PutTxWithPubKey(tx1, pNode)
 	require.NoError(t, err)
 
-	// Second put with same TxID also succeeds (overwrites, no ErrDuplicateTx)
+	// Second put with same TxID returns ErrDuplicateTx
 	err = store.PutTxWithPubKey(tx2, pNode)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrDuplicateTx)
 
-	// GetTx should return the second version
+	// GetTx should return the first version (not overwritten)
 	got, err := store.GetTx(txID)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("version2"), got.RawTx)
+	assert.Equal(t, []byte("version1"), got.RawTx)
 }
 
 // --- Gap 7 (store.go): MemHeaderStore.PutHeader auto-computes hash ---
@@ -1545,6 +1672,44 @@ func BenchmarkVerifyTransaction(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// --- MemHeaderStore immutability tests ---
+
+func TestMemHeaderStore_GetHeaderByHeight_ReturnsImmutableCopy(t *testing.T) {
+	store := NewMemHeaderStore()
+
+	hdr := buildTestHeader(0, makeHash(0x00), makeHash(0x11))
+	originalNonce := hdr.Nonce
+	require.NoError(t, store.PutHeader(hdr))
+
+	got, err := store.GetHeaderByHeight(0)
+	require.NoError(t, err)
+	got.Nonce = 99999
+	got.PrevBlock[0] = 0xFF // mutate slice field
+
+	got2, err := store.GetHeaderByHeight(0)
+	require.NoError(t, err)
+	assert.Equal(t, originalNonce, got2.Nonce, "scalar mutation should not affect stored header")
+	assert.NotEqual(t, byte(0xFF), got2.PrevBlock[0], "slice mutation should not affect stored header")
+}
+
+func TestMemHeaderStore_GetTip_ReturnsImmutableCopy(t *testing.T) {
+	store := NewMemHeaderStore()
+
+	hdr := buildTestHeader(0, makeHash(0x00), makeHash(0x11))
+	originalNonce := hdr.Nonce
+	require.NoError(t, store.PutHeader(hdr))
+
+	tip, err := store.GetTip()
+	require.NoError(t, err)
+	tip.Nonce = 99999
+	tip.MerkleRoot[0] = 0xFF // mutate slice field
+
+	tip2, err := store.GetTip()
+	require.NoError(t, err)
+	assert.Equal(t, originalNonce, tip2.Nonce, "scalar mutation should not affect stored tip")
+	assert.NotEqual(t, byte(0xFF), tip2.MerkleRoot[0], "slice mutation should not affect stored tip")
 }
 
 func BenchmarkComputeHeaderHash(b *testing.B) {

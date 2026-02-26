@@ -1,6 +1,8 @@
 package x402
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/script"
@@ -142,7 +144,8 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 //	<sig> <seller_pubkey> <capsule> OP_TRUE
 //
 // Where OP_TRUE selects the IF branch.
-func ParseHTLCPreimage(spendingTx []byte) ([]byte, error) {
+// If expectedCapsuleHash is non-nil, verifies SHA256(preimage) matches before returning.
+func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte) ([]byte, error) {
 	if len(spendingTx) == 0 {
 		return nil, fmt.Errorf("%w: empty spending transaction", ErrInvalidPreimage)
 	}
@@ -181,8 +184,40 @@ func ParseHTLCPreimage(spendingTx []byte) ([]byte, error) {
 			continue
 		}
 
+		// Verify hash if expected hash provided.
+		if expectedCapsuleHash != nil {
+			h := sha256.Sum256(preimageChunk.Data)
+			if !bytes.Equal(h[:], expectedCapsuleHash) {
+				continue // Hash mismatch — try next input.
+			}
+		}
+
 		return preimageChunk.Data, nil
 	}
 
 	return nil, fmt.Errorf("%w: no HTLC preimage found in transaction inputs", ErrInvalidPreimage)
+}
+
+// ExtractCapsuleHashFromHTLC extracts the capsule hash embedded in an HTLC locking script.
+// The HTLC structure is: OP_IF OP_SHA256 <capsule_hash_32> OP_EQUALVERIFY ...
+func ExtractCapsuleHashFromHTLC(htlcScript []byte) ([]byte, error) {
+	s := script.NewFromBytes(htlcScript)
+	chunks, err := s.Chunks()
+	if err != nil {
+		return nil, fmt.Errorf("parse HTLC script: %w", err)
+	}
+	// Expected: chunks[0]=OP_IF, chunks[1]=OP_SHA256, chunks[2]=<32-byte push data>
+	if len(chunks) < 3 {
+		return nil, fmt.Errorf("HTLC script too short: %d chunks", len(chunks))
+	}
+	if chunks[0].Op != script.OpIF {
+		return nil, fmt.Errorf("expected OP_IF at position 0, got 0x%02x", chunks[0].Op)
+	}
+	if chunks[1].Op != script.OpSHA256 {
+		return nil, fmt.Errorf("expected OP_SHA256 at position 1, got 0x%02x", chunks[1].Op)
+	}
+	if len(chunks[2].Data) != CapsuleHashLen {
+		return nil, fmt.Errorf("capsule hash must be %d bytes, got %d", CapsuleHashLen, len(chunks[2].Data))
+	}
+	return chunks[2].Data, nil
 }

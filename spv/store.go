@@ -106,11 +106,11 @@ func (s *MemHeaderStore) GetHeader(blockHash []byte) (*BlockHeader, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	h, ok := s.byHash[hashKey(blockHash)]
+	hdr, ok := s.byHash[hashKey(blockHash)]
 	if !ok {
 		return nil, ErrHeaderNotFound
 	}
-	return h, nil
+	return copyBlockHeader(hdr), nil
 }
 
 // GetHeaderByHeight retrieves a header by block height.
@@ -122,7 +122,7 @@ func (s *MemHeaderStore) GetHeaderByHeight(height uint32) (*BlockHeader, error) 
 	if !ok {
 		return nil, ErrHeaderNotFound
 	}
-	return h, nil
+	return copyBlockHeader(h), nil
 }
 
 // GetTip returns the header with the greatest height.
@@ -133,7 +133,7 @@ func (s *MemHeaderStore) GetTip() (*BlockHeader, error) {
 	if !s.hasTip {
 		return nil, ErrHeaderNotFound
 	}
-	return s.byHeight[s.tipHeight], nil
+	return copyBlockHeader(s.byHeight[s.tipHeight]), nil
 }
 
 // GetHeaderCount returns the total number of stored headers.
@@ -141,6 +141,24 @@ func (s *MemHeaderStore) GetHeaderCount() (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return uint64(len(s.byHash)), nil
+}
+
+// copyBlockHeader returns a deep copy of a BlockHeader, including all slice fields.
+func copyBlockHeader(h *BlockHeader) *BlockHeader {
+	cpy := *h
+	if len(h.PrevBlock) > 0 {
+		cpy.PrevBlock = make([]byte, len(h.PrevBlock))
+		copy(cpy.PrevBlock, h.PrevBlock)
+	}
+	if len(h.MerkleRoot) > 0 {
+		cpy.MerkleRoot = make([]byte, len(h.MerkleRoot))
+		copy(cpy.MerkleRoot, h.MerkleRoot)
+	}
+	if len(h.Hash) > 0 {
+		cpy.Hash = make([]byte, len(h.Hash))
+		copy(cpy.Hash, h.Hash)
+	}
+	return &cpy
 }
 
 // MemTxStore is an in-memory implementation of TxStore for testing.
@@ -192,6 +210,10 @@ func (s *MemTxStore) PutTxWithPubKey(tx *StoredTx, pNode []byte) error {
 	defer s.mu.Unlock()
 
 	key := hashKey(tx.TxID)
+	if _, exists := s.byTxID[key]; exists {
+		return ErrDuplicateTx
+	}
+
 	s.byTxID[key] = tx
 
 	if len(pNode) > 0 {

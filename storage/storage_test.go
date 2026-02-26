@@ -740,6 +740,38 @@ func TestDelete_DoubleDelete(t *testing.T) {
 
 // --- Gap 4: KeyHashToPath edge cases ---
 
+func TestKeyHashToPath_EmptyPanics(t *testing.T) {
+	// KeyHashToPath should not panic on empty input.
+	assert.NotPanics(t, func() {
+		result := KeyHashToPath("/base", nil)
+		assert.Empty(t, result)
+	})
+
+	assert.NotPanics(t, func() {
+		result := KeyHashToPath("/base", []byte{})
+		assert.Empty(t, result)
+	})
+}
+
+func TestPut_NoTempFileRemainsOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	fs, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	keyHash := make([]byte, 32)
+	keyHash[0] = 0xAB
+	require.NoError(t, fs.Put(keyHash, []byte("test content")))
+
+	// Verify the permanent file exists.
+	path := KeyHashToPath(dir, keyHash)
+	_, err = os.Stat(path)
+	assert.NoError(t, err, "permanent file must exist")
+
+	// Verify no .tmp file remains.
+	_, err = os.Stat(path + ".tmp")
+	assert.True(t, os.IsNotExist(err), "temp file must not remain after successful write")
+}
+
 func TestKeyHashToPath_AllZeros(t *testing.T) {
 	keyHash := make([]byte, 32) // all zeros
 	hexHash := hex.EncodeToString(keyHash)

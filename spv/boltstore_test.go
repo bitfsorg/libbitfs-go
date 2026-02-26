@@ -325,6 +325,24 @@ func TestBoltTxStore_DeleteCleansPubKeyIndex(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestBoltTxStore_PutTxWithPubKey_RejectsDuplicate(t *testing.T) {
+	store := tempBoltStore(t)
+	txs := store.Txs()
+
+	pNode := make([]byte, 33)
+	pNode[0] = 0x02
+
+	tx := testTx(0x42)
+
+	// First put should succeed.
+	err := txs.PutTxWithPubKey(tx, pNode)
+	require.NoError(t, err)
+
+	// Second put with same TxID should return ErrDuplicateTx.
+	err = txs.PutTxWithPubKey(tx, pNode)
+	assert.ErrorIs(t, err, ErrDuplicateTx)
+}
+
 func TestBoltStore_CreateDirectory(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "a", "b", "c")

@@ -18,6 +18,9 @@ var _ BlockchainService = (*RPCClient)(nil)
 // btcToSat converts a BTC float64 amount (as returned by the RPC node) to satoshis.
 // It uses math.Round to avoid floating-point truncation issues.
 func btcToSat(btc float64) uint64 {
+	if btc <= 0 {
+		return 0
+	}
 	return uint64(math.Round(btc * 1e8))
 }
 
@@ -118,9 +121,20 @@ func ParseBIP37MerkleBlock(data []byte, targetTxID []byte) (header []byte, txInd
 	return header, txIndex, branches, totalTxs, nil
 }
 
+// maxMerkleTreeTxs is the upper bound on totalTxs accepted by traversePartialMerkleTree.
+// 1M transactions covers any realistic block and prevents OOM from malformed data.
+const maxMerkleTreeTxs = 1 << 20
+
 // traversePartialMerkleTree walks the BIP37 partial Merkle tree structure and
 // extracts the branch nodes needed for a standard Merkle proof of the target tx.
 func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint32, targetTxID []byte) (txIndex uint32, branch [][]byte, err error) {
+	if totalTxs == 0 {
+		return 0, nil, fmt.Errorf("totalTxs is zero")
+	}
+	if totalTxs > maxMerkleTreeTxs {
+		return 0, nil, fmt.Errorf("totalTxs %d exceeds maximum %d", totalTxs, maxMerkleTreeTxs)
+	}
+
 	height := uint32(0)
 	for calcTreeWidth(totalTxs, height) > 1 {
 		height++
@@ -128,6 +142,7 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 
 	hashIdx := 0
 	bitIdx := 0
+	var hashErr error
 
 	getBit := func() bool {
 		if bitIdx/8 >= len(flagBytes) {
@@ -140,10 +155,15 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 
 	getHash := func() []byte {
 		if hashIdx >= len(hashes) {
-			return nil
+			hashErr = fmt.Errorf("merkle hash pool exhausted at index %d", hashIdx)
+			return make([]byte, 32) // Return zeros; caller checks hashErr.
 		}
 		h := hashes[hashIdx]
 		hashIdx++
+		if h == nil {
+			hashErr = fmt.Errorf("nil hash at index %d", hashIdx-1)
+			return make([]byte, 32)
+		}
 		return h
 	}
 
@@ -203,6 +223,9 @@ func traversePartialMerkleTree(hashes [][]byte, flagBytes []byte, totalTxs uint3
 	}
 
 	result := traverse(height, 0)
+	if hashErr != nil {
+		return 0, nil, hashErr
+	}
 	if !result.found {
 		return 0, nil, fmt.Errorf("target tx not found in partial merkle tree")
 	}

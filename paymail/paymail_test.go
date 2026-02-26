@@ -1,9 +1,11 @@
 package paymail
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -333,7 +335,7 @@ func TestResolveEndpoints_NoRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_Success(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)
@@ -363,14 +365,14 @@ func TestResolveDNSLinkPubKey_NoRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_InvalidHex(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "not-valid-hex!")
+	resolver.addTXT("_bitfs.example.com", "bitfs=not-valid-hex!")
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrInvalidPubKey)
 }
 
 func TestResolveDNSLinkPubKey_WrongLength(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "02a1b2c3") // too short
+	resolver.addTXT("_bitfs.example.com", "bitfs=02a1b2c3") // too short
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrInvalidPubKey)
 }
@@ -379,7 +381,7 @@ func TestResolveDNSLinkPubKey_WrongPrefix(t *testing.T) {
 	resolver := newMockDNSResolver()
 	// 33 bytes but starts with 04 (uncompressed prefix)
 	badKey := "04" + strings.Repeat("ab", 32)
-	resolver.addTXT("_bitfs_pubkey.example.com", badKey)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+badKey)
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrInvalidPubKey)
 }
@@ -545,7 +547,7 @@ func TestResolveURI_Paymail_NoSRV_Fallback(t *testing.T) {
 
 func TestResolveURI_DNSLink(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex)
 	resolver.addSRV("bitfs", "tcp", "example.com",
 		&net.SRV{Target: "node1.example.com.", Port: 443, Priority: 10, Weight: 60},
 	)
@@ -750,7 +752,7 @@ func TestParseURI_PubKeyLooksLikeDNSLink(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_SkipsEmptyTXTRecords(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "", "", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "", "", "bitfs="+testPubKeyHex)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)
@@ -760,7 +762,7 @@ func TestResolveDNSLinkPubKey_SkipsEmptyTXTRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_AllEmptyTXTRecords(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "", "", "")
+	resolver.addTXT("_bitfs.example.com", "", "", "")
 
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.Error(t, err)
@@ -769,8 +771,8 @@ func TestResolveDNSLinkPubKey_AllEmptyTXTRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_WhitespaceTrimming(t *testing.T) {
 	resolver := newMockDNSResolver()
-	padded := "  " + testPubKeyHex + "  "
-	resolver.addTXT("_bitfs_pubkey.example.com", padded)
+	padded := "  bitfs=" + testPubKeyHex + "  "
+	resolver.addTXT("_bitfs.example.com", padded)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)
@@ -882,7 +884,7 @@ func TestResolvePKI_PKIEndpointInvalidJSON(t *testing.T) {
 
 func TestResolveURI_DNSLink_NoSRV_Fallback(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex)
 	// No SRV records added -- should fall back to domain:443
 
 	pubKey, endpoints, err := ResolveURIWith("bitfs://example.com/docs", DefaultHTTPClient, resolver)
@@ -901,6 +903,89 @@ type errorHTTPClient struct {
 
 func (e *errorHTTPClient) Get(url string) (*http.Response, error) {
 	return nil, e.err
+}
+
+// responseMockHTTPClient returns pre-built responses keyed by URL.
+type responseMockHTTPClient struct {
+	responses  map[string]*http.Response
+	captureURL *string // if non-nil, captures the last requested URL
+}
+
+func (m *responseMockHTTPClient) Get(url string) (*http.Response, error) {
+	if m.captureURL != nil {
+		*m.captureURL = url
+	}
+	resp, ok := m.responses[url]
+	if !ok {
+		return nil, fmt.Errorf("no mock response for %s", url)
+	}
+	return resp, nil
+}
+
+func TestDiscoverCapabilities_OversizedResponse(t *testing.T) {
+	// Server returns a response larger than MaxPaymailResponseSize.
+	bigBody := make([]byte, MaxPaymailResponseSize+1)
+	for i := range bigBody {
+		bigBody[i] = 'x'
+	}
+
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(bigBody)),
+			},
+		},
+	}
+
+	_, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	// Should fail with JSON parse error since body is truncated garbage
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing JSON")
+}
+
+func TestDiscoverCapabilities_RejectsNonHTTPS(t *testing.T) {
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki": "http://evil.com/pki/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+	}
+
+	caps, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	require.NoError(t, err)
+	assert.Empty(t, caps.PKI, "non-HTTPS PKI URL should be rejected")
+}
+
+func TestResolvePKI_EscapesTemplateVars(t *testing.T) {
+	var capturedURL string
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki": "https://example.com/pki/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+		captureURL: &capturedURL,
+	}
+
+	// Alias with path-traversal characters
+	_, _ = ResolvePKIWithClient("test/../admin", "example.com", mock)
+
+	// The ".." must be percent-encoded in the URL
+	assert.NotContains(t, capturedURL, "test/../admin")
 }
 
 func mustDecodeHex(s string) []byte {

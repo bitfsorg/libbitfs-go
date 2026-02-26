@@ -149,6 +149,12 @@ func (w *Wallet) DeriveNodeKey(vaultIndex uint32, filePath []uint32, hardened []
 		}
 	}
 
+	// Guard: accountIndex = vaultIndex + DefaultVaultAccount must be < Hardened (0x80000000),
+	// since deriveAccount adds Hardened offset for hardened derivation.
+	if vaultIndex >= Hardened-DefaultVaultAccount {
+		return nil, fmt.Errorf("%w: vault index %d exceeds BIP32 hardened boundary", ErrFileIndexOutOfRange, vaultIndex)
+	}
+
 	accountIndex := vaultIndex + DefaultVaultAccount
 	accountKey, err := w.deriveAccount(accountIndex)
 	if err != nil {

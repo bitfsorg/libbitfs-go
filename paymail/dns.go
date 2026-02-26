@@ -80,19 +80,21 @@ func ResolveEndpointsWithResolver(domain string, recordType string, resolver DNS
 	return endpoints, nil
 }
 
-// ResolveDNSLinkPubKey resolves _bitfs_pubkey.{domain} TXT record.
+// ResolveDNSLinkPubKey resolves _bitfs.{domain} TXT record with bitfs= prefix.
 // Returns the P_node compressed public key bytes.
 func ResolveDNSLinkPubKey(domain string) ([]byte, error) {
 	return ResolveDNSLinkPubKeyWithResolver(domain, DefaultDNSResolver)
 }
 
 // ResolveDNSLinkPubKeyWithResolver resolves the DNSLink public key using the provided DNS resolver.
+// It looks up _bitfs.{domain} TXT records and extracts the pubkey from records
+// with the "bitfs=" prefix (e.g., "bitfs=02a1b2c3...").
 func ResolveDNSLinkPubKeyWithResolver(domain string, resolver DNSResolver) ([]byte, error) {
 	if domain == "" {
 		return nil, fmt.Errorf("%w: empty domain", ErrDNSLookupFailed)
 	}
 
-	name := "_bitfs_pubkey." + domain
+	name := "_bitfs." + domain
 	txts, err := resolver.LookupTXT(name)
 	if err != nil {
 		return nil, fmt.Errorf("%w: TXT lookup for %s: %w", ErrDNSLookupFailed, name, err)
@@ -102,18 +104,23 @@ func ResolveDNSLinkPubKeyWithResolver(domain string, resolver DNSResolver) ([]by
 		return nil, fmt.Errorf("%w: no TXT records for %s", ErrDNSLookupFailed, name)
 	}
 
-	// Use the first non-empty TXT record
+	// Find the first TXT record with the "bitfs=" prefix.
+	const prefix = "bitfs="
 	var pubKeyHex string
 	for _, txt := range txts {
 		txt = strings.TrimSpace(txt)
-		if txt != "" {
-			pubKeyHex = txt
+		if strings.HasPrefix(txt, prefix) {
+			pubKeyHex = strings.TrimSpace(strings.TrimPrefix(txt, prefix))
 			break
 		}
 	}
 
 	if pubKeyHex == "" {
-		return nil, fmt.Errorf("%w: empty TXT record for %s", ErrDNSLookupFailed, name)
+		return nil, fmt.Errorf("%w: no bitfs= TXT record for %s", ErrDNSLookupFailed, name)
+	}
+
+	if len(pubKeyHex) != 66 {
+		return nil, fmt.Errorf("%w: expected 66 hex chars, got %d", ErrInvalidPubKey, len(pubKeyHex))
 	}
 
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)

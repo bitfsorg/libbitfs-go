@@ -62,10 +62,6 @@ func VerifyMerkleProof(proof *MerkleProof, expectedMerkleRoot []byte) (bool, err
 	if len(expectedMerkleRoot) != 32 {
 		return false, fmt.Errorf("%w: expected merkle root must be 32 bytes", ErrInvalidHeader)
 	}
-	if len(proof.Nodes) == 0 {
-		return false, ErrEmptyProofNodes
-	}
-
 	computedRoot := ComputeMerkleRoot(proof.TxID, proof.Index, proof.Nodes)
 	if computedRoot == nil {
 		return false, fmt.Errorf("%w: failed to compute merkle root", ErrMerkleProofInvalid)

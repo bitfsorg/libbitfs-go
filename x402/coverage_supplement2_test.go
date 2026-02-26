@@ -34,7 +34,7 @@ func TestParseHTLCPreimage_Op1Variant(t *testing.T) {
 	_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 546)
 	raw := tx.Bytes()
 
-	preimage, err := ParseHTLCPreimage(raw)
+	preimage, err := ParseHTLCPreimage(raw, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("capsule-preimage-op1"), preimage)
 }
@@ -62,7 +62,7 @@ func TestParseHTLCPreimage_NonOpTrueLastChunk(t *testing.T) {
 	_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 546)
 	raw := tx.Bytes()
 
-	_, err := ParseHTLCPreimage(raw)
+	_, err := ParseHTLCPreimage(raw, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 

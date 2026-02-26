@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -100,9 +101,19 @@ func (c *RPCClient) Call(ctx context.Context, method string, params []interface{
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("%w: HTTP %d: %s", ErrConnectionFailed, resp.StatusCode, string(respBody))
+	}
+
 	var rpcResp rpcResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
 		return fmt.Errorf("%w: decode response: %w", ErrInvalidResponse, err)
+	}
+
+	if rpcResp.ID != reqBody.ID {
+		return fmt.Errorf("%w: response ID mismatch: expected %d, got %d",
+			ErrInvalidResponse, reqBody.ID, rpcResp.ID)
 	}
 
 	if rpcResp.Error != nil {

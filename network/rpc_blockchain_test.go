@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,10 +33,10 @@ func rpcTestServer(t *testing.T, handlers map[string]func(params []interface{}) 
 		resp := rpcResponse{ID: req.ID}
 		if rpcErr != nil {
 			resp.Error = rpcErr
-			w.WriteHeader(http.StatusInternalServerError)
 		} else {
 			resp.Result, _ = json.Marshal(result)
 		}
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
 }
@@ -519,7 +520,101 @@ func TestGetUTXOSpent(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTxNotFound)
 }
 
+func TestTraversePartialMerkleTree_HugeTotalTxs(t *testing.T) {
+	// totalTxs = MaxUint32 should be rejected to prevent OOM.
+	hashes := [][]byte{make([]byte, 32)}
+	flags := []byte{0xFF}
+	target := make([]byte, 32)
+
+	_, _, err := traversePartialMerkleTree(hashes, flags, 0xFFFFFFFF, target)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestTraversePartialMerkleTree_ZeroTotalTxs(t *testing.T) {
+	hashes := [][]byte{make([]byte, 32)}
+	flags := []byte{0xFF}
+	target := make([]byte, 32)
+
+	_, _, err := traversePartialMerkleTree(hashes, flags, 0, target)
+	assert.Error(t, err)
+}
+
+func TestTraversePartialMerkleTree_ExhaustedHashes(t *testing.T) {
+	target := make([]byte, 32)
+	target[0] = 0x42
+
+	// Claim 4 txs but only provide 1 hash — traversal needs more.
+	hashes := [][]byte{target}
+	flags := []byte{0xFF} // All interior nodes flagged
+
+	_, _, err := traversePartialMerkleTree(hashes, flags, 4, target)
+	assert.Error(t, err, "should fail when hash pool is exhausted")
+}
+
+func TestRPCClient_RejectsNon200Status(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Internal Server Error"))
+	}))
+	defer ts.Close()
+
+	client := NewRPCClient(RPCConfig{URL: ts.URL})
+	var result json.RawMessage
+	err := client.Call(context.Background(), "getblockcount", nil, &result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}
+
+func TestRPCClient_RejectsUnauthorized(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("Unauthorized"))
+	}))
+	defer ts.Close()
+
+	client := NewRPCClient(RPCConfig{URL: ts.URL})
+	err := client.Call(context.Background(), "getblockcount", nil, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestRPCClient_RejectsMismatchedResponseID(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID int64 `json:"id"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+
+		w.Header().Set("Content-Type", "application/json")
+		resp := fmt.Sprintf(`{"id":%d,"result":42,"error":null}`, req.ID+999)
+		_, _ = w.Write([]byte(resp))
+	}))
+	defer ts.Close()
+
+	client := NewRPCClient(RPCConfig{URL: ts.URL})
+	var result int
+	err := client.Call(context.Background(), "getblockcount", nil, &result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "response ID mismatch")
+}
+
 func TestRPCClientImplementsBlockchainService(t *testing.T) {
 	// Compile-time interface check
 	var _ BlockchainService = (*RPCClient)(nil)
+}
+
+// M-NEW-18: btcToSat must return 0 for negative values.
+func TestBtcToSat_NegativeReturnsZero(t *testing.T) {
+	assert.Equal(t, uint64(0), btcToSat(-0.001))
+	assert.Equal(t, uint64(0), btcToSat(-1.0))
+	assert.Equal(t, uint64(0), btcToSat(-0.00000001))
+}
+
+func TestBtcToSat_NormalValues(t *testing.T) {
+	assert.Equal(t, uint64(100000), btcToSat(0.001))
+	assert.Equal(t, uint64(100000000), btcToSat(1.0))
+	assert.Equal(t, uint64(1), btcToSat(0.00000001))
+	assert.Equal(t, uint64(0), btcToSat(0.0))
 }

@@ -94,7 +94,7 @@ func TestParseHTLCPreimage_NoHTLCSpend(t *testing.T) {
 		UnlockingScript:  s,
 	})
 	raw := tx.Bytes()
-	_, err := ParseHTLCPreimage(raw)
+	_, err := ParseHTLCPreimage(raw, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 
@@ -107,7 +107,7 @@ func TestParseHTLCPreimage_NilUnlockingScript(t *testing.T) {
 		UnlockingScript:  nil,
 	})
 	raw := tx.Bytes()
-	_, err := ParseHTLCPreimage(raw)
+	_, err := ParseHTLCPreimage(raw, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 
@@ -125,7 +125,7 @@ func TestParseHTLCPreimage_EmptyPreimageData(t *testing.T) {
 		UnlockingScript:  s,
 	})
 	raw := tx.Bytes()
-	_, err := ParseHTLCPreimage(raw)
+	_, err := ParseHTLCPreimage(raw, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 
@@ -156,7 +156,7 @@ func TestParseHTLCPreimage_MultipleInputsSecondMatches(t *testing.T) {
 	})
 
 	raw := tx.Bytes()
-	preimage, err := ParseHTLCPreimage(raw)
+	preimage, err := ParseHTLCPreimage(raw, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("capsule-preimage"), preimage)
 }

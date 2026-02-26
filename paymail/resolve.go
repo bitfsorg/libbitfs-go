@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -38,6 +39,10 @@ type wellKnownResponse struct {
 	Capabilities map[string]interface{} `json:"capabilities"`
 }
 
+// MaxPaymailResponseSize is the maximum allowed response body size for Paymail
+// HTTP requests (1 MB). This prevents memory exhaustion from malicious servers.
+const MaxPaymailResponseSize = 1 << 20
+
 // Known Paymail capability URNs.
 const (
 	capPKI           = "pki"
@@ -61,18 +66,18 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 		return nil, fmt.Errorf("%w: empty domain", ErrPaymailDiscovery)
 	}
 
-	url := "https://" + domain + "/.well-known/bsvalias"
-	resp, err := client.Get(url)
+	wkURL := "https://" + domain + "/.well-known/bsvalias"
+	resp, err := client.Get(wkURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: GET %s: %w", ErrPaymailDiscovery, url, err)
+		return nil, fmt.Errorf("%w: GET %s: %w", ErrPaymailDiscovery, wkURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPaymailDiscovery, url, resp.StatusCode)
+		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPaymailDiscovery, wkURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxPaymailResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading response: %w", ErrPaymailDiscovery, err)
 	}
@@ -88,6 +93,11 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 	for key, val := range wk.Capabilities {
 		urlStr, ok := val.(string)
 		if !ok {
+			continue
+		}
+		// Validate URL is well-formed and uses HTTPS.
+		parsed, err := url.Parse(urlStr)
+		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "") {
 			continue
 		}
 		switch {
@@ -125,9 +135,9 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 		return nil, fmt.Errorf("%w: no PKI capability found for %s", ErrPKIResolution, domain)
 	}
 
-	// Build PKI URL from template
-	pkiURL := strings.ReplaceAll(caps.PKI, "{alias}", alias)
-	pkiURL = strings.ReplaceAll(pkiURL, "{domain.tld}", domain)
+	// Build PKI URL from template, escaping variables to prevent path traversal.
+	pkiURL := strings.ReplaceAll(caps.PKI, "{alias}", url.PathEscape(alias))
+	pkiURL = strings.ReplaceAll(pkiURL, "{domain.tld}", url.PathEscape(domain))
 
 	resp, err := client.Get(pkiURL)
 	if err != nil {
@@ -139,7 +149,7 @@ func ResolvePKIWithClient(alias, domain string, client HTTPClient) ([]byte, erro
 		return nil, fmt.Errorf("%w: GET %s returned status %d", ErrPKIResolution, pkiURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxPaymailResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading response: %w", ErrPKIResolution, err)
 	}

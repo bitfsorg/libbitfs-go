@@ -33,6 +33,6 @@ var (
 	// ErrDuplicateTx indicates a transaction with this TxID already exists.
 	ErrDuplicateTx = errors.New("spv: duplicate transaction")
 
-	// ErrEmptyProofNodes indicates the merkle proof has no branch nodes.
-	ErrEmptyProofNodes = errors.New("spv: empty proof nodes")
+	// ErrInsufficientPoW indicates the header hash does not meet the target difficulty.
+	ErrInsufficientPoW = errors.New("spv: insufficient proof of work")
 )

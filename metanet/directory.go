@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // ListDirectory returns the ChildEntry list of a directory node.
@@ -152,10 +153,17 @@ func recomputeMerkleRoot(node *Node) {
 	node.MerkleRoot = ComputeDirectoryMerkleRoot(node.Children)
 }
 
+// MaxChildNameLen is the maximum length of a directory entry name in bytes.
+const MaxChildNameLen = 255
+
 // validateChildName checks that a name is valid for a directory entry.
 func validateChildName(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: name is empty", ErrInvalidName)
+	}
+	// Max child name: 255 bytes (fits uint8, well under uint16 serialization limit).
+	if len(name) > MaxChildNameLen {
+		return fmt.Errorf("%w: name too long (%d bytes, max %d)", ErrInvalidName, len(name), MaxChildNameLen)
 	}
 	if strings.Contains(name, "/") {
 		return fmt.Errorf("%w: name contains path separator", ErrInvalidName)
@@ -165,6 +173,11 @@ func validateChildName(name string) error {
 	}
 	if strings.ContainsAny(name, "\x00") {
 		return fmt.Errorf("%w: name contains null byte", ErrInvalidName)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return fmt.Errorf("%w: name contains control or formatting character U+%04X", ErrInvalidName, r)
+		}
 	}
 	return nil
 }

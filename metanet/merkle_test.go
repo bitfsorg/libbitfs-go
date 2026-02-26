@@ -1,6 +1,7 @@
 package metanet
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -325,18 +326,22 @@ func TestSerializePayload_MerkleRoot(t *testing.T) {
 	found := false
 	offset := 0
 	for offset < len(payload) {
-		if offset+3 > len(payload) {
+		if offset >= len(payload) {
 			break
 		}
 		tag := payload[offset]
-		length := int(payload[offset+1]) | int(payload[offset+2])<<8
-		offset += 3
+		offset++
+		length, n := binary.Uvarint(payload[offset:])
+		if n <= 0 {
+			break
+		}
+		offset += n
 		if tag == 0x1A {
 			found = true
-			assert.Equal(t, 32, length, "MerkleRoot TLV length must be 32")
-			assert.Equal(t, node.MerkleRoot, payload[offset:offset+length])
+			assert.Equal(t, uint64(32), length, "MerkleRoot TLV length must be 32")
+			assert.Equal(t, node.MerkleRoot, payload[offset:offset+int(length)])
 		}
-		offset += length
+		offset += int(length)
 	}
 	assert.True(t, found, "tag 0x1A must be present in serialized payload")
 }

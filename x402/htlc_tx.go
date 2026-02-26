@@ -2,6 +2,7 @@ package x402
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -79,6 +80,8 @@ type BuyerRefundParams struct {
 	HTLCScript        []byte         // HTLC locking script bytes
 	FundingAmount     uint64         // HTLC output amount (for sighash computation)
 	BuyerPrivKey      *ec.PrivateKey // Signs the refund (buyer's half of 2-of-2)
+	FundingTxID       []byte         // Expected HTLC funding TxID (32 bytes); nil skips check
+	FundingVout       uint32         // Expected HTLC funding output index
 }
 
 // defaultHTLCFeeRate is the default fee rate for HTLC transactions.
@@ -86,7 +89,8 @@ const defaultHTLCFeeRate = uint64(1) // 1 sat/byte
 
 // VerifyHTLCFunding verifies a funding transaction has an output whose locking
 // script matches the expected HTLC script with at least minAmount satoshis.
-// Returns the output index (vout) of the matching HTLC output.
+// Returns the output index (vout) of the first matching HTLC output.
+// If multiple outputs match, the first (lowest index) is returned deterministically.
 func VerifyHTLCFunding(rawTx []byte, expectedScript []byte, minAmount uint64) (uint32, error) {
 	if len(rawTx) == 0 {
 		return 0, fmt.Errorf("%w: empty raw transaction", ErrInvalidTx)
@@ -141,6 +145,9 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 	if len(params.ChangeAddr) != PubKeyHashLen {
 		return nil, fmt.Errorf("%w: change address must be %d bytes", ErrInvalidParams, PubKeyHashLen)
 	}
+	if params.Amount == 0 {
+		return nil, fmt.Errorf("%w: amount must be greater than zero", ErrInvalidParams)
+	}
 
 	htlcAmount := params.Amount
 
@@ -174,8 +181,10 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 		totalInput += utxo.Amount
 	}
 
-	// Estimate fee: ~148 bytes per input + ~40 bytes per output + 10 overhead.
-	estSize := uint64(10 + len(params.UTXOs)*148 + 2*40)
+	// Estimate fee using actual HTLC script size.
+	htlcOutputSize := uint64(8 + 1 + len(htlcScript))       // satoshis + varint + script
+	changeOutputSize := uint64(8 + 1 + 25)                   // P2PKH: 8 + varint + OP_DUP..OP_CHECKSIG
+	estSize := uint64(10+len(params.UTXOs)*148) + htlcOutputSize + changeOutputSize
 	estFee := estSize * feeRate
 
 	totalNeeded := htlcAmount + estFee
@@ -272,6 +281,16 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 		return nil, fmt.Errorf("%w: output address must be %d bytes", ErrInvalidParams, PubKeyHashLen)
 	}
 
+	// Verify capsule matches the hash embedded in the HTLC script.
+	capsuleHashFromScript, err := ExtractCapsuleHashFromHTLC(params.HTLCScript)
+	if err != nil {
+		return nil, fmt.Errorf("%w: extract capsule hash: %w", ErrInvalidParams, err)
+	}
+	computedHash := sha256.Sum256(params.Capsule)
+	if !bytes.Equal(computedHash[:], capsuleHashFromScript) {
+		return nil, fmt.Errorf("%w: capsule hash mismatch", ErrInvalidParams)
+	}
+
 	feeRate := params.FeeRate
 	if feeRate == 0 {
 		feeRate = defaultHTLCFeeRate
@@ -330,7 +349,7 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	}
 
 	// Build unlocking script: <sig+flag> <seller_pubkey> <capsule> OP_TRUE
-	sigBytes := append(sig.Serialize(), byte(sighash.AllForkID))
+	sigBytes := appendSighashFlag(sig.Serialize())
 	sellerPubKey := params.SellerPrivKey.PubKey().Compressed()
 
 	unlockScript := &script.Script{}
@@ -436,7 +455,7 @@ func BuildSellerPreSignedRefund(params *SellerPreSignParams) (*SellerPreSignResu
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 
-	sellerSigBytes := append(sig.Serialize(), byte(sighash.AllForkID))
+	sellerSigBytes := appendSighashFlag(sig.Serialize())
 
 	return &SellerPreSignResult{
 		TxBytes:   tx.Bytes(),
@@ -476,6 +495,19 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 		return nil, fmt.Errorf("%w: pre-signed tx has no inputs", ErrInvalidTx)
 	}
 
+	// Verify the pre-signed tx references the expected HTLC funding UTXO.
+	if len(params.FundingTxID) > 0 {
+		inputTxID := tx.Inputs[0].SourceTXID[:]
+		if !bytes.Equal(inputTxID, params.FundingTxID) {
+			return nil, fmt.Errorf("%w: input references %x, expected %x",
+				ErrFundingMismatch, inputTxID, params.FundingTxID)
+		}
+		if tx.Inputs[0].SourceTxOutIndex != params.FundingVout {
+			return nil, fmt.Errorf("%w: input vout %d, expected %d",
+				ErrFundingMismatch, tx.Inputs[0].SourceTxOutIndex, params.FundingVout)
+		}
+	}
+
 	// Re-attach source tx output for sighash computation (not preserved in serialization).
 	htlcLockingScript := script.NewFromBytes(params.HTLCScript)
 	tx.Inputs[0].SetSourceTxOutput(&transaction.TransactionOutput{
@@ -494,7 +526,7 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 
-	buyerSigBytes := append(sig.Serialize(), byte(sighash.AllForkID))
+	buyerSigBytes := appendSighashFlag(sig.Serialize())
 
 	// Build unlocking script: OP_0 <buyer_sig> <seller_sig> OP_FALSE
 	// OP_0 is the dummy element required by CHECKMULTISIG.
@@ -516,6 +548,15 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 	tx.Inputs[0].UnlockingScript = unlockScript
 
 	return tx, nil
+}
+
+// appendSighashFlag safely appends a sighash type flag to a DER-encoded
+// signature without mutating the original slice.
+func appendSighashFlag(sigDER []byte) []byte {
+	result := make([]byte, len(sigDER)+1)
+	copy(result, sigDER)
+	result[len(sigDER)] = byte(sighash.AllForkID)
+	return result
 }
 
 // buildP2PKHLockScript creates a P2PKH locking script from a 20-byte public key hash.

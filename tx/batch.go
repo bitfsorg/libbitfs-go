@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -14,14 +15,10 @@ import (
 type BatchOpType int
 
 const (
-	// BatchOpParentUpdate updates a parent directory's children list.
-	BatchOpParentUpdate BatchOpType = iota
-	// BatchOpChildCreate creates a new child node.
-	BatchOpChildCreate
-	// BatchOpChildDelete deletes a child node.
-	BatchOpChildDelete
-	// BatchOpNodeUpdate self-updates an existing node.
-	BatchOpNodeUpdate
+	OpCreate     BatchOpType = iota // Create a new child node (OP_RETURN + P2PKH refresh)
+	OpUpdate                        // Update existing node (OP_RETURN + P2PKH refresh)
+	OpDelete                        // Delete node (OP_RETURN only, no P2PKH — UTXO dies)
+	OpCreateRoot                    // Create root node (no input UTXO, OP_RETURN + P2PKH refresh)
 )
 
 // BatchNodeOp represents one node operation within a MutationBatch.
@@ -116,7 +113,9 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		if len(op.ParentTxID) != 0 && len(op.ParentTxID) != TxIDLen {
 			return nil, fmt.Errorf("%w: op[%d] parent TxID length %d", ErrInvalidParentTxID, i, len(op.ParentTxID))
 		}
-		if op.InputUTXO != nil && op.PrivateKey == nil {
+		// OpCreateRoot: no InputUTXO or PrivateKey needed.
+		// All other types with InputUTXO must have PrivateKey.
+		if op.Type != OpCreateRoot && op.InputUTXO != nil && op.PrivateKey == nil {
 			return nil, fmt.Errorf("%w: op[%d] has InputUTXO but nil PrivateKey", ErrNilParam, i)
 		}
 	}
@@ -133,15 +132,32 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		feeRate = DefaultFeeRate
 	}
 
-	// Count inputs and outputs for fee estimation.
+	// Dedup: track unique (TxID, Vout) pairs for node inputs.
+	type utxoKey struct {
+		txid string
+		vout uint32
+	}
+	seenInputs := make(map[utxoKey]bool)
 	numNodeInputs := 0
 	for _, op := range b.ops {
-		if op.InputUTXO != nil {
+		if op.InputUTXO == nil {
+			continue
+		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if !seenInputs[key] {
+			seenInputs[key] = true
 			numNodeInputs++
 		}
 	}
 	numInputs := numNodeInputs + len(b.feeInputs)
-	numOutputs := len(b.ops)*2 + 1 // 2 per op (OP_RETURN + P2PKH) + 1 change
+	// Count outputs: 2 per non-delete op (OP_RETURN + P2PKH), 1 per delete op (OP_RETURN only), + 1 change.
+	numDeleteOps := 0
+	for _, op := range b.ops {
+		if op.Type == OpDelete {
+			numDeleteOps++
+		}
+	}
+	numOutputs := (len(b.ops)-numDeleteOps)*2 + numDeleteOps + 1
 
 	// Total payload size for fee estimation.
 	totalPayloadSize := 0
@@ -154,10 +170,16 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 	baseEstimate := EstimateTxSize(numInputs, numOutputs, totalPayloadSize)
 	estFee := EstimateFee(baseEstimate, feeRate)
 
-	// Calculate total available funds.
+	// Calculate total available funds (deduped node inputs + fee inputs).
 	totalAvailable := uint64(0)
+	seenFunds := make(map[utxoKey]bool)
 	for _, op := range b.ops {
-		if op.InputUTXO != nil {
+		if op.InputUTXO == nil {
+			continue
+		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if !seenFunds[key] {
+			seenFunds[key] = true
 			totalAvailable += op.InputUTXO.Amount
 		}
 	}
@@ -165,8 +187,8 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		totalAvailable += fi.Amount
 	}
 
-	// Total needed: DustLimit per op + fee.
-	totalDust := uint64(len(b.ops)) * DustLimit
+	// Total needed: DustLimit per non-delete op + fee.
+	totalDust := uint64(len(b.ops)-numDeleteOps) * DustLimit
 	totalNeeded := totalDust + estFee
 
 	if totalAvailable < totalNeeded {
@@ -179,11 +201,17 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 
 	// --- Add inputs ---
 
-	// First: node UTXO inputs (ops with existing UTXOs).
+	// First: deduped node UTXO inputs (ops with existing UTXOs).
+	addedInputs := make(map[utxoKey]bool)
 	for _, op := range b.ops {
 		if op.InputUTXO == nil {
 			continue
 		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if addedInputs[key] {
+			continue // skip duplicate
+		}
+		addedInputs[key] = true
 		utxoHash, err := chainhash.NewHash(op.InputUTXO.TxID)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid UTXO TxID: %w", ErrScriptBuild, err)
@@ -229,6 +257,12 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		})
 		nodeResults[i].OpReturnVout = vout
 		vout++
+
+		// OpDelete: no P2PKH output — node UTXO dies.
+		if op.Type == OpDelete {
+			nodeResults[i].NodeUTXO = nil
+			continue
+		}
 
 		// P2PKH dust output for this node.
 		nodeLockScript, err := BuildP2PKHScript(op.PubKey)
@@ -290,4 +324,110 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		NodeOps:    nodeResults,
 		ChangeUTXO: changeUTXO,
 	}, nil
+}
+
+// Sign signs a BatchResult using the private keys from the batch's ops and fee inputs.
+// It reconstructs the signing UTXO array in the same order as Build() added inputs:
+// deduped node inputs first, then fee inputs.
+// Returns the signed transaction hex.
+func (b *MutationBatch) Sign(result *BatchResult) (string, error) {
+	if result == nil || len(result.RawTx) == 0 {
+		return "", fmt.Errorf("%w: BatchResult", ErrNilParam)
+	}
+
+	// Reconstruct signing UTXOs in input order (matching Build).
+	type utxoKey struct {
+		txid string
+		vout uint32
+	}
+	var signingUTXOs []*UTXO
+
+	// 1. Deduped node inputs (same order as Build).
+	seen := make(map[utxoKey]bool)
+	for _, op := range b.ops {
+		if op.InputUTXO == nil {
+			continue
+		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		signingUTXOs = append(signingUTXOs, op.InputUTXO)
+	}
+
+	// 2. Fee inputs.
+	signingUTXOs = append(signingUTXOs, b.feeInputs...)
+
+	// Sign via SignMetanetTx.
+	mtx := &MetanetTx{RawTx: result.RawTx}
+	txHex, err := SignMetanetTx(mtx, signingUTXOs)
+	if err != nil {
+		return "", err
+	}
+
+	// Propagate TxID to BatchResult and all NodeUTXOs.
+	result.RawTx = mtx.RawTx
+	result.TxID = mtx.TxID
+	for i := range result.NodeOps {
+		if result.NodeOps[i].NodeUTXO != nil {
+			result.NodeOps[i].NodeUTXO.TxID = mtx.TxID
+		}
+	}
+	if result.ChangeUTXO != nil {
+		result.ChangeUTXO.TxID = mtx.TxID
+	}
+
+	return txHex, nil
+}
+
+// OpCount returns the number of operations in the batch.
+func (b *MutationBatch) OpCount() int {
+	return len(b.ops)
+}
+
+// AddCreateChild adds an OpCreate op for a new child node.
+// The parentUTXO is the parent's P_node UTXO to spend (Metanet edge).
+func (b *MutationBatch) AddCreateChild(childPub *ec.PublicKey, parentTxID []byte, payload []byte, parentUTXO *UTXO, parentPriv *ec.PrivateKey) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:       OpCreate,
+		PubKey:     childPub,
+		ParentTxID: parentTxID,
+		Payload:    payload,
+		InputUTXO:  parentUTXO,
+		PrivateKey: parentPriv,
+	})
+}
+
+// AddSelfUpdate adds an OpUpdate op for updating an existing node.
+func (b *MutationBatch) AddSelfUpdate(nodePub *ec.PublicKey, parentTxID []byte, payload []byte, nodeUTXO *UTXO, nodePriv *ec.PrivateKey) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:       OpUpdate,
+		PubKey:     nodePub,
+		ParentTxID: parentTxID,
+		Payload:    payload,
+		InputUTXO:  nodeUTXO,
+		PrivateKey: nodePriv,
+	})
+}
+
+// AddDelete adds an OpDelete op. The node's UTXO is spent but no refresh is produced.
+func (b *MutationBatch) AddDelete(nodePub *ec.PublicKey, parentTxID []byte, payload []byte, nodeUTXO *UTXO, nodePriv *ec.PrivateKey) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:       OpDelete,
+		PubKey:     nodePub,
+		ParentTxID: parentTxID,
+		Payload:    payload,
+		InputUTXO:  nodeUTXO,
+		PrivateKey: nodePriv,
+	})
+}
+
+// AddCreateRoot adds an OpCreateRoot op. No input UTXO needed.
+func (b *MutationBatch) AddCreateRoot(rootPub *ec.PublicKey, payload []byte) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:    OpCreateRoot,
+		PubKey:  rootPub,
+		Payload: payload,
+	})
 }
