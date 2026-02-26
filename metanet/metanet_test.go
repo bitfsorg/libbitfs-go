@@ -2071,6 +2071,37 @@ func TestFollowLink_TwoNodeCycle(t *testing.T) {
 		"two-node cycle A->B->A should be caught by depth counter")
 }
 
+// --- validateChildName control character tests ---
+
+func TestValidateChildName_RejectsControlChars(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"tab", "foo\tbar", true},
+		{"newline", "foo\nbar", true},
+		{"carriage return", "foo\rbar", true},
+		{"escape", "foo\x1bbar", true},
+		{"unicode RTL override", "foo\u202ebar", true},
+		{"unicode LTR override", "foo\u202dbar", true},
+		{"unicode zero-width joiner", "foo\u200dbar", true},
+		{"valid ascii", "hello-world_123.txt", false},
+		{"valid unicode", "日本語ファイル.txt", false},
+		{"valid emoji", "📁data", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateChildName(tt.input)
+			if tt.wantErr {
+				assert.ErrorIs(t, err, ErrInvalidName)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // =============================================================================
 // Benchmarks
 // =============================================================================

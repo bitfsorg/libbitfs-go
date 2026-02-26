@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // ListDirectory returns the ChildEntry list of a directory node.
@@ -172,6 +173,11 @@ func validateChildName(name string) error {
 	}
 	if strings.ContainsAny(name, "\x00") {
 		return fmt.Errorf("%w: name contains null byte", ErrInvalidName)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return fmt.Errorf("%w: name contains control or formatting character U+%04X", ErrInvalidName, r)
+		}
 	}
 	return nil
 }
