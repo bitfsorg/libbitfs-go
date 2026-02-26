@@ -71,6 +71,11 @@ func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 		return ErrHeaderNotFound
 	}
 
+	// Step 3.5: Verify the header's Proof-of-Work meets stated difficulty.
+	if err := VerifyPoW(header); err != nil {
+		return fmt.Errorf("%w: %w", ErrInsufficientPoW, err)
+	}
+
 	// Step 4: Verify the Merkle proof against the header's Merkle root
 	valid, err := VerifyMerkleProof(tx.Proof, header.MerkleRoot)
 	if err != nil {

@@ -1007,6 +1007,37 @@ func TestVerifyTransaction_MerkleRootMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrMerkleProofInvalid)
 }
 
+func TestVerifyTransaction_InvalidPoW(t *testing.T) {
+	txHash := makeTxHash(0x42)
+	proof, merkleRoot := buildTestProof(txHash)
+
+	// Build header with valid structure but INVALID PoW (nonce=0, hard target).
+	header := &BlockHeader{
+		Version:    1,
+		PrevBlock:  makeHash(0x00),
+		MerkleRoot: merkleRoot,
+		Timestamp:  1700000000,
+		Bits:       0x01003456, // Impossibly hard target
+		Nonce:      0,
+		Height:     100,
+	}
+	header.Hash = ComputeHeaderHash(header)
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	err := headerStore.PutHeader(header)
+	require.NoError(t, err)
+
+	storedTx := &StoredTx{
+		TxID:        txHash,
+		Proof:       proof,
+		BlockHeight: 100,
+	}
+
+	err = VerifyTransaction(storedTx, headerStore)
+	assert.ErrorIs(t, err, ErrInsufficientPoW)
+}
+
 // --- Gap 4: VerifyHeaderChain -- invalid PrevBlock length ---
 
 func TestVerifyHeaderChain_InvalidPrevBlockLength(t *testing.T) {
