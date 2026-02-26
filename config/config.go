@@ -143,7 +143,7 @@ func SaveConfig(path string, cfg Config) error {
 		return fmt.Errorf("config: create directory %s: %w", dir, err)
 	}
 
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("config: create %s: %w", path, err)
 	}

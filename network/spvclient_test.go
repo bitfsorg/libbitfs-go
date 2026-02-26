@@ -75,6 +75,67 @@ func TestSPVClientVerifyTxUnconfirmed(t *testing.T) {
 	assert.False(t, result.Confirmed)
 }
 
+func TestSyncHeaders_RejectsDisconnectedHeader(t *testing.T) {
+	// header0 is valid genesis.
+	header0 := &spv.BlockHeader{
+		Version:    1,
+		PrevBlock:  make([]byte, 32),
+		MerkleRoot: make([]byte, 32),
+		Timestamp:  1000,
+		Bits:       0x207fffff,
+		Nonce:      0,
+		Height:     0,
+	}
+	header0.Hash = spv.ComputeHeaderHash(header0)
+
+	// header1 has PrevBlock that does NOT match header0.Hash.
+	badPrevBlock := make([]byte, 32)
+	badPrevBlock[0] = 0xFF
+	header1 := &spv.BlockHeader{
+		Version:    1,
+		PrevBlock:  badPrevBlock,
+		MerkleRoot: make([]byte, 32),
+		Timestamp:  2000,
+		Bits:       0x207fffff,
+		Nonce:      0,
+		Height:     1,
+	}
+	header1.Hash = spv.ComputeHeaderHash(header1)
+
+	headers := []*spv.BlockHeader{header0, header1}
+	hashes := []string{
+		hex.EncodeToString(header0.Hash),
+		hex.EncodeToString(header1.Hash),
+	}
+
+	mock := &MockBlockchainService{
+		GetBestBlockHeightFn: func(ctx context.Context) (uint64, error) {
+			return 1, nil
+		},
+		GetBlockHeaderFn: func(ctx context.Context, blockHash string) ([]byte, error) {
+			for _, h := range headers {
+				if hex.EncodeToString(h.Hash) == blockHash {
+					return spv.SerializeHeader(h), nil
+				}
+			}
+			return nil, ErrTxNotFound
+		},
+	}
+
+	store := spv.NewMemHeaderStore()
+	client := NewSPVClient(mock, store)
+	client.getBlockHash = func(ctx context.Context, height uint64) (string, error) {
+		if int(height) < len(hashes) {
+			return hashes[height], nil
+		}
+		return "", ErrTxNotFound
+	}
+
+	err := client.SyncHeaders(context.Background())
+	assert.Error(t, err, "disconnected header must be rejected")
+	assert.Contains(t, err.Error(), "chain break")
+}
+
 func TestSPVClientSyncHeaders(t *testing.T) {
 	// Create a chain of 2 headers.
 	genesis := &spv.BlockHeader{

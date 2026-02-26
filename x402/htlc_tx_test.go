@@ -318,7 +318,7 @@ func TestBuildSellerClaimTx(t *testing.T) {
 		require.NotEmpty(t, claimTx.Bytes())
 
 		// Verify we can extract the capsule from the claim tx.
-		extracted, err := ParseHTLCPreimage(claimTx.Bytes())
+		extracted, err := ParseHTLCPreimage(claimTx.Bytes(), nil)
 		require.NoError(t, err)
 		assert.Equal(t, capsule, extracted)
 	})
@@ -644,7 +644,7 @@ func TestHTLCRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- Buyer side: extract capsule from claim tx ---
-	extractedCapsule, err := ParseHTLCPreimage(claimTx.Bytes())
+	extractedCapsule, err := ParseHTLCPreimage(claimTx.Bytes(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, capsule, extractedCapsule)
 
@@ -722,10 +722,104 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	assert.Equal(t, uint32(0xfffffffe), refundTx.Inputs[0].SequenceNumber)
 
 	// Verify no preimage is extractable (refund path has no capsule).
-	_, err = ParseHTLCPreimage(refundTx.Bytes())
+	_, err = ParseHTLCPreimage(refundTx.Bytes(), nil)
 	assert.Error(t, err, "refund tx should not contain a capsule preimage")
 
 	t.Logf("HTLC buyer refund round-trip OK")
+}
+
+func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
+	capsule := []byte("the-real-capsule-data!!")
+	capsuleHash := sha256.Sum256(capsule)
+
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+	sellerPub := sellerPriv.PubKey().Compressed()
+	sellerAddr := sellerPriv.PubKey().Hash()
+
+	htlcScript, err := BuildHTLC(&HTLCParams{
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPub,
+		SellerAddr:   sellerAddr,
+		CapsuleHash:  capsuleHash[:],
+		Amount:       50000,
+		Timeout:      144,
+	})
+	require.NoError(t, err)
+
+	// Wrong capsule — hash won't match what's in the HTLC script.
+	wrongCapsule := []byte("wrong-capsule-data-here!!")
+
+	_, err = BuildSellerClaimTx(&SellerClaimParams{
+		SellerPrivKey: sellerPriv,
+		FundingTxID:   make([]byte, 32),
+		FundingVout:   0,
+		FundingAmount: 100000,
+		HTLCScript:    htlcScript,
+		Capsule:       wrongCapsule,
+		OutputAddr:    sellerAddr,
+	})
+	assert.Error(t, err, "wrong capsule must be rejected")
+	assert.Contains(t, err.Error(), "capsule hash mismatch")
+}
+
+func TestParseHTLCPreimage_WithHashVerification(t *testing.T) {
+	capsule := []byte("secret-capsule-data-for-test!!")
+	capsuleHash := sha256.Sum256(capsule)
+
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerPub := sellerPriv.PubKey().Compressed()
+	sellerAddr := sellerPriv.PubKey().Hash()
+
+	mockTxID := sha256.Sum256([]byte("hash-verify-funding"))
+	buyerPKH := buyerPriv.PubKey().Hash()
+	p2pkhScript := buildTestP2PKHScript(t, buyerPKH)
+
+	fundResult, err := BuildHTLCFundingTx(&HTLCFundingParams{
+		BuyerPrivKey: buyerPriv,
+		SellerAddr:   sellerAddr,
+		SellerPubKey: sellerPub,
+		CapsuleHash:  capsuleHash[:],
+		Amount:       50000,
+		Timeout:      144,
+		UTXOs:        []*HTLCUTXO{{TxID: mockTxID[:], Vout: 0, Amount: 100000, ScriptPubKey: p2pkhScript}},
+		ChangeAddr:   buyerPKH,
+		FeeRate:      1,
+	})
+	require.NoError(t, err)
+
+	claimTx, err := BuildSellerClaimTx(&SellerClaimParams{
+		SellerPrivKey: sellerPriv,
+		FundingTxID:   fundResult.TxID,
+		FundingVout:   fundResult.HTLCVout,
+		FundingAmount: fundResult.HTLCAmount,
+		HTLCScript:    fundResult.HTLCScript,
+		Capsule:       capsule,
+		OutputAddr:    sellerAddr,
+	})
+	require.NoError(t, err)
+
+	// Correct hash: should succeed.
+	extracted, err := ParseHTLCPreimage(claimTx.Bytes(), capsuleHash[:])
+	require.NoError(t, err)
+	assert.Equal(t, capsule, extracted)
+
+	// Wrong hash: should fail.
+	wrongHash := make([]byte, 32)
+	wrongHash[0] = 0xFF
+	_, err = ParseHTLCPreimage(claimTx.Bytes(), wrongHash)
+	assert.Error(t, err, "wrong capsule hash must be rejected")
+
+	// Nil hash (backward compat): should succeed without verification.
+	extracted2, err := ParseHTLCPreimage(claimTx.Bytes(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, capsule, extracted2)
 }
 
 func TestSigSerializeAppendSafety(t *testing.T) {

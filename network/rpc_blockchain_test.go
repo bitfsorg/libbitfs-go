@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,10 +33,10 @@ func rpcTestServer(t *testing.T, handlers map[string]func(params []interface{}) 
 		resp := rpcResponse{ID: req.ID}
 		if rpcErr != nil {
 			resp.Error = rpcErr
-			w.WriteHeader(http.StatusInternalServerError)
 		} else {
 			resp.Result, _ = json.Marshal(result)
 		}
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
 }
@@ -549,6 +550,54 @@ func TestTraversePartialMerkleTree_ExhaustedHashes(t *testing.T) {
 
 	_, _, err := traversePartialMerkleTree(hashes, flags, 4, target)
 	assert.Error(t, err, "should fail when hash pool is exhausted")
+}
+
+func TestRPCClient_RejectsNon200Status(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Internal Server Error"))
+	}))
+	defer ts.Close()
+
+	client := NewRPCClient(RPCConfig{URL: ts.URL})
+	var result json.RawMessage
+	err := client.Call(context.Background(), "getblockcount", nil, &result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}
+
+func TestRPCClient_RejectsUnauthorized(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("Unauthorized"))
+	}))
+	defer ts.Close()
+
+	client := NewRPCClient(RPCConfig{URL: ts.URL})
+	err := client.Call(context.Background(), "getblockcount", nil, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestRPCClient_RejectsMismatchedResponseID(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID int64 `json:"id"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+
+		w.Header().Set("Content-Type", "application/json")
+		resp := fmt.Sprintf(`{"id":%d,"result":42,"error":null}`, req.ID+999)
+		_, _ = w.Write([]byte(resp))
+	}))
+	defer ts.Close()
+
+	client := NewRPCClient(RPCConfig{URL: ts.URL})
+	var result int
+	err := client.Call(context.Background(), "getblockcount", nil, &result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "response ID mismatch")
 }
 
 func TestRPCClientImplementsBlockchainService(t *testing.T) {

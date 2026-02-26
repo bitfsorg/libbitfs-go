@@ -2,6 +2,7 @@ package x402
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -278,6 +279,16 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	}
 	if len(params.OutputAddr) != PubKeyHashLen {
 		return nil, fmt.Errorf("%w: output address must be %d bytes", ErrInvalidParams, PubKeyHashLen)
+	}
+
+	// Verify capsule matches the hash embedded in the HTLC script.
+	capsuleHashFromScript, err := ExtractCapsuleHashFromHTLC(params.HTLCScript)
+	if err != nil {
+		return nil, fmt.Errorf("%w: extract capsule hash: %w", ErrInvalidParams, err)
+	}
+	computedHash := sha256.Sum256(params.Capsule)
+	if !bytes.Equal(computedHash[:], capsuleHashFromScript) {
+		return nil, fmt.Errorf("%w: capsule hash mismatch", ErrInvalidParams)
 	}
 
 	feeRate := params.FeeRate

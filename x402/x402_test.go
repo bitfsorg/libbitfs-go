@@ -409,15 +409,15 @@ func TestBuildHTLC_ContainsBuyerPubKey(t *testing.T) {
 // --- ParseHTLCPreimage Tests ---
 
 func TestParseHTLCPreimage_EmptyTx(t *testing.T) {
-	_, err := ParseHTLCPreimage(nil)
+	_, err := ParseHTLCPreimage(nil, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 
-	_, err = ParseHTLCPreimage([]byte{})
+	_, err = ParseHTLCPreimage([]byte{}, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 
 func TestParseHTLCPreimage_InvalidTx(t *testing.T) {
-	_, err := ParseHTLCPreimage([]byte{0x01, 0x02, 0x03})
+	_, err := ParseHTLCPreimage([]byte{0x01, 0x02, 0x03}, nil)
 	assert.ErrorIs(t, err, ErrInvalidTx)
 }
 
@@ -457,7 +457,7 @@ func TestParseHTLCPreimage_ValidTx(t *testing.T) {
 
 	rawTx := tx.Bytes()
 
-	extracted, err := ParseHTLCPreimage(rawTx)
+	extracted, err := ParseHTLCPreimage(rawTx, nil)
 	require.NoError(t, err)
 	assert.Equal(t, preimage, extracted)
 }
@@ -792,7 +792,7 @@ func TestParseHTLCPreimage_NoHTLCInput(t *testing.T) {
 
 	rawTx := tx.Bytes()
 
-	_, err = ParseHTLCPreimage(rawTx)
+	_, err = ParseHTLCPreimage(rawTx, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 	assert.Contains(t, err.Error(), "no HTLC preimage found")
 }
@@ -824,7 +824,7 @@ func TestParseHTLCPreimage_ShortUnlockingScript(t *testing.T) {
 
 	rawTx := tx.Bytes()
 
-	_, err = ParseHTLCPreimage(rawTx)
+	_, err = ParseHTLCPreimage(rawTx, nil)
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 

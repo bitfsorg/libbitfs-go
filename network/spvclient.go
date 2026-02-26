@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -160,6 +161,22 @@ func (s *SPVClient) SyncHeaders(ctx context.Context) error {
 		}
 		header.Height = uint32(h)
 		header.Hash = spv.ComputeHeaderHash(header)
+
+		// Validate chain continuity: header.PrevBlock must match previous header's hash.
+		if h == 0 {
+			// Genesis block: PrevBlock should be all zeros.
+			if !bytes.Equal(header.PrevBlock, make([]byte, 32)) {
+				return fmt.Errorf("network: genesis block has non-zero PrevBlock")
+			}
+		} else {
+			prevHeader, prevErr := s.headers.GetHeaderByHeight(uint32(h - 1))
+			if prevErr != nil {
+				return fmt.Errorf("network: previous header at %d not found: %w", h-1, prevErr)
+			}
+			if !bytes.Equal(header.PrevBlock, prevHeader.Hash) {
+				return fmt.Errorf("network: chain break at height %d: PrevBlock does not match header at %d", h, h-1)
+			}
+		}
 
 		if putErr := s.headers.PutHeader(header); putErr != nil {
 			return fmt.Errorf("network: store header at %d: %w", h, putErr)

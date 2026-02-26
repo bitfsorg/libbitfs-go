@@ -481,6 +481,30 @@ func TestLoadConfig_PermissionDenied(t *testing.T) {
 // Supplementary tests — ConfigPath
 // ---------------------------------------------------------------------------
 
+func TestSaveConfig_RestrictivePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission test not applicable on Windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.conf")
+
+	err := SaveConfig(path, Config{Network: "mainnet"})
+	if err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("config file should have 0600 permissions, got %04o", perm)
+	}
+}
+
 func TestConfigPath_WithTrailingSlash(t *testing.T) {
 	got := ConfigPath("/foo/")
 	want := filepath.Join("/foo", "config")
