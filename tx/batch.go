@@ -333,3 +333,63 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		ChangeUTXO: changeUTXO,
 	}, nil
 }
+
+// Sign signs a BatchResult using the private keys from the batch's ops and fee inputs.
+// It reconstructs the signing UTXO array in the same order as Build() added inputs:
+// deduped node inputs first, then fee inputs.
+// Returns the signed transaction hex.
+func (b *MutationBatch) Sign(result *BatchResult) (string, error) {
+	if result == nil || len(result.RawTx) == 0 {
+		return "", fmt.Errorf("%w: BatchResult", ErrNilParam)
+	}
+
+	// Reconstruct signing UTXOs in input order (matching Build).
+	type utxoKey struct {
+		txid string
+		vout uint32
+	}
+	var signingUTXOs []*UTXO
+
+	// 1. Deduped node inputs (same order as Build).
+	seen := make(map[utxoKey]bool)
+	for _, op := range b.ops {
+		if op.InputUTXO == nil {
+			continue
+		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		signingUTXOs = append(signingUTXOs, op.InputUTXO)
+	}
+
+	// 2. Fee inputs.
+	signingUTXOs = append(signingUTXOs, b.feeInputs...)
+
+	// Sign via SignMetanetTx.
+	mtx := &MetanetTx{RawTx: result.RawTx}
+	txHex, err := SignMetanetTx(mtx, signingUTXOs)
+	if err != nil {
+		return "", err
+	}
+
+	// Propagate TxID to BatchResult and all NodeUTXOs.
+	result.RawTx = mtx.RawTx
+	result.TxID = mtx.TxID
+	for i := range result.NodeOps {
+		if result.NodeOps[i].NodeUTXO != nil {
+			result.NodeOps[i].NodeUTXO.TxID = mtx.TxID
+		}
+	}
+	if result.ChangeUTXO != nil {
+		result.ChangeUTXO.TxID = mtx.TxID
+	}
+
+	return txHex, nil
+}
+
+// OpCount returns the number of operations in the batch.
+func (b *MutationBatch) OpCount() int {
+	return len(b.ops)
+}

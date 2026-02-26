@@ -354,3 +354,94 @@ func TestMutationBatch_ParentDedup(t *testing.T) {
 	assert.NotNil(t, result.NodeOps[0].NodeUTXO) // child P2PKH
 	assert.NotNil(t, result.NodeOps[1].NodeUTXO) // parent refresh P2PKH
 }
+
+func TestMutationBatch_Sign_SingleOp(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	feePub := pub // use same key for simplicity
+
+	nodeScript, err := BuildP2PKHScript(pub)
+	require.NoError(t, err)
+	feeScript, err := BuildP2PKHScript(feePub)
+	require.NoError(t, err)
+
+	batch := NewMutationBatch()
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpUpdate,
+		PubKey:     pub,
+		ParentTxID: bytes.Repeat([]byte{0xcc}, 32),
+		Payload:    []byte("update-payload"),
+		InputUTXO: &UTXO{
+			TxID: bytes.Repeat([]byte{0x01}, 32), Vout: 0, Amount: 1,
+			ScriptPubKey: nodeScript, PrivateKey: priv,
+		},
+		PrivateKey: priv,
+	})
+	batch.AddFeeInput(&UTXO{
+		TxID: bytes.Repeat([]byte{0x02}, 32), Vout: 0, Amount: 5000,
+		ScriptPubKey: feeScript, PrivateKey: priv,
+	})
+
+	result, err := batch.Build()
+	require.NoError(t, err)
+
+	txHex, err := batch.Sign(result)
+	require.NoError(t, err)
+	assert.NotEmpty(t, txHex)
+
+	// TxID should be set on result and all NodeUTXOs.
+	assert.NotNil(t, result.TxID)
+	assert.NotNil(t, result.NodeOps[0].NodeUTXO.TxID)
+}
+
+func TestMutationBatch_Sign_MultiOp_WithDedup(t *testing.T) {
+	// Two ops sharing the same InputUTXO (deduped), plus one fee input.
+	_, childPub := generateTestKeyPair(t)
+	parentPriv, parentPub := generateTestKeyPair(t)
+	feePriv, feePub := generateTestKeyPair(t)
+
+	parentScript, err := BuildP2PKHScript(parentPub)
+	require.NoError(t, err)
+	feeScript, err := BuildP2PKHScript(feePub)
+	require.NoError(t, err)
+
+	parentUTXO := &UTXO{
+		TxID: bytes.Repeat([]byte{0x01}, 32), Vout: 1, Amount: 1,
+		ScriptPubKey: parentScript, PrivateKey: parentPriv,
+	}
+
+	batch := NewMutationBatch()
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpCreate,
+		PubKey:     childPub,
+		ParentTxID: bytes.Repeat([]byte{0xbb}, 32),
+		Payload:    []byte("child-payload"),
+		InputUTXO:  parentUTXO,
+		PrivateKey: parentPriv,
+	})
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpUpdate,
+		PubKey:     parentPub,
+		ParentTxID: bytes.Repeat([]byte{0x00}, 32),
+		Payload:    []byte("parent-updated"),
+		InputUTXO:  parentUTXO, // same UTXO
+		PrivateKey: parentPriv,
+	})
+	batch.AddFeeInput(&UTXO{
+		TxID: bytes.Repeat([]byte{0x02}, 32), Vout: 0, Amount: 5000,
+		ScriptPubKey: feeScript, PrivateKey: feePriv,
+	})
+
+	result, err := batch.Build()
+	require.NoError(t, err)
+
+	txHex, err := batch.Sign(result)
+	require.NoError(t, err)
+	assert.NotEmpty(t, txHex)
+
+	// Both NodeUTXOs should have TxID set.
+	assert.NotNil(t, result.NodeOps[0].NodeUTXO.TxID)
+	assert.NotNil(t, result.NodeOps[1].NodeUTXO.TxID)
+	if result.ChangeUTXO != nil {
+		assert.NotNil(t, result.ChangeUTXO.TxID)
+	}
+}
