@@ -1674,6 +1674,44 @@ func BenchmarkVerifyTransaction(b *testing.B) {
 	}
 }
 
+// --- MemHeaderStore immutability tests ---
+
+func TestMemHeaderStore_GetHeaderByHeight_ReturnsImmutableCopy(t *testing.T) {
+	store := NewMemHeaderStore()
+
+	hdr := buildTestHeader(0, makeHash(0x00), makeHash(0x11))
+	originalNonce := hdr.Nonce
+	require.NoError(t, store.PutHeader(hdr))
+
+	got, err := store.GetHeaderByHeight(0)
+	require.NoError(t, err)
+	got.Nonce = 99999
+	got.PrevBlock[0] = 0xFF // mutate slice field
+
+	got2, err := store.GetHeaderByHeight(0)
+	require.NoError(t, err)
+	assert.Equal(t, originalNonce, got2.Nonce, "scalar mutation should not affect stored header")
+	assert.NotEqual(t, byte(0xFF), got2.PrevBlock[0], "slice mutation should not affect stored header")
+}
+
+func TestMemHeaderStore_GetTip_ReturnsImmutableCopy(t *testing.T) {
+	store := NewMemHeaderStore()
+
+	hdr := buildTestHeader(0, makeHash(0x00), makeHash(0x11))
+	originalNonce := hdr.Nonce
+	require.NoError(t, store.PutHeader(hdr))
+
+	tip, err := store.GetTip()
+	require.NoError(t, err)
+	tip.Nonce = 99999
+	tip.MerkleRoot[0] = 0xFF // mutate slice field
+
+	tip2, err := store.GetTip()
+	require.NoError(t, err)
+	assert.Equal(t, originalNonce, tip2.Nonce, "scalar mutation should not affect stored tip")
+	assert.NotEqual(t, byte(0xFF), tip2.MerkleRoot[0], "slice mutation should not affect stored tip")
+}
+
 func BenchmarkComputeHeaderHash(b *testing.B) {
 	h := &BlockHeader{
 		Version:    1,
