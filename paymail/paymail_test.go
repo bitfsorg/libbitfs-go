@@ -907,10 +907,14 @@ func (e *errorHTTPClient) Get(url string) (*http.Response, error) {
 
 // responseMockHTTPClient returns pre-built responses keyed by URL.
 type responseMockHTTPClient struct {
-	responses map[string]*http.Response
+	responses  map[string]*http.Response
+	captureURL *string // if non-nil, captures the last requested URL
 }
 
 func (m *responseMockHTTPClient) Get(url string) (*http.Response, error) {
+	if m.captureURL != nil {
+		*m.captureURL = url
+	}
 	resp, ok := m.responses[url]
 	if !ok {
 		return nil, fmt.Errorf("no mock response for %s", url)
@@ -938,6 +942,50 @@ func TestDiscoverCapabilities_OversizedResponse(t *testing.T) {
 	// Should fail with JSON parse error since body is truncated garbage
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing JSON")
+}
+
+func TestDiscoverCapabilities_RejectsNonHTTPS(t *testing.T) {
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki": "http://evil.com/pki/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+	}
+
+	caps, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	require.NoError(t, err)
+	assert.Empty(t, caps.PKI, "non-HTTPS PKI URL should be rejected")
+}
+
+func TestResolvePKI_EscapesTemplateVars(t *testing.T) {
+	var capturedURL string
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki": "https://example.com/pki/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+		captureURL: &capturedURL,
+	}
+
+	// Alias with path-traversal characters
+	_, _ = ResolvePKIWithClient("test/../admin", "example.com", mock)
+
+	// The ".." must be percent-encoded in the URL
+	assert.NotContains(t, capturedURL, "test/../admin")
 }
 
 func mustDecodeHex(s string) []byte {
