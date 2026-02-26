@@ -21,14 +21,6 @@ const (
 	OpCreateRoot                    // Create root node (no input UTXO, OP_RETURN + P2PKH refresh)
 )
 
-// Aliases for backward compatibility during migration. Deprecated.
-const (
-	BatchOpParentUpdate = OpUpdate
-	BatchOpChildCreate  = OpCreate
-	BatchOpChildDelete  = OpDelete
-	BatchOpNodeUpdate   = OpUpdate
-)
-
 // BatchNodeOp represents one node operation within a MutationBatch.
 type BatchNodeOp struct {
 	Type       BatchOpType
