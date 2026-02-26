@@ -14,14 +14,18 @@ import (
 type BatchOpType int
 
 const (
-	// BatchOpParentUpdate updates a parent directory's children list.
-	BatchOpParentUpdate BatchOpType = iota
-	// BatchOpChildCreate creates a new child node.
-	BatchOpChildCreate
-	// BatchOpChildDelete deletes a child node.
-	BatchOpChildDelete
-	// BatchOpNodeUpdate self-updates an existing node.
-	BatchOpNodeUpdate
+	OpCreate     BatchOpType = iota // Create a new child node (OP_RETURN + P2PKH refresh)
+	OpUpdate                        // Update existing node (OP_RETURN + P2PKH refresh)
+	OpDelete                        // Delete node (OP_RETURN only, no P2PKH — UTXO dies)
+	OpCreateRoot                    // Create root node (no input UTXO, OP_RETURN + P2PKH refresh)
+)
+
+// Aliases for backward compatibility during migration. Deprecated.
+const (
+	BatchOpParentUpdate = OpUpdate
+	BatchOpChildCreate  = OpCreate
+	BatchOpChildDelete  = OpDelete
+	BatchOpNodeUpdate   = OpUpdate
 )
 
 // BatchNodeOp represents one node operation within a MutationBatch.
@@ -116,7 +120,9 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		if len(op.ParentTxID) != 0 && len(op.ParentTxID) != TxIDLen {
 			return nil, fmt.Errorf("%w: op[%d] parent TxID length %d", ErrInvalidParentTxID, i, len(op.ParentTxID))
 		}
-		if op.InputUTXO != nil && op.PrivateKey == nil {
+		// OpCreateRoot: no InputUTXO or PrivateKey needed.
+		// All other types with InputUTXO must have PrivateKey.
+		if op.Type != OpCreateRoot && op.InputUTXO != nil && op.PrivateKey == nil {
 			return nil, fmt.Errorf("%w: op[%d] has InputUTXO but nil PrivateKey", ErrNilParam, i)
 		}
 	}
@@ -141,7 +147,14 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		}
 	}
 	numInputs := numNodeInputs + len(b.feeInputs)
-	numOutputs := len(b.ops)*2 + 1 // 2 per op (OP_RETURN + P2PKH) + 1 change
+	// Count outputs: 2 per non-delete op (OP_RETURN + P2PKH), 1 per delete op (OP_RETURN only), + 1 change.
+	numDeleteOps := 0
+	for _, op := range b.ops {
+		if op.Type == OpDelete {
+			numDeleteOps++
+		}
+	}
+	numOutputs := (len(b.ops)-numDeleteOps)*2 + numDeleteOps + 1
 
 	// Total payload size for fee estimation.
 	totalPayloadSize := 0
@@ -165,8 +178,8 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		totalAvailable += fi.Amount
 	}
 
-	// Total needed: DustLimit per op + fee.
-	totalDust := uint64(len(b.ops)) * DustLimit
+	// Total needed: DustLimit per non-delete op + fee.
+	totalDust := uint64(len(b.ops)-numDeleteOps) * DustLimit
 	totalNeeded := totalDust + estFee
 
 	if totalAvailable < totalNeeded {
@@ -229,6 +242,12 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		})
 		nodeResults[i].OpReturnVout = vout
 		vout++
+
+		// OpDelete: no P2PKH output — node UTXO dies.
+		if op.Type == OpDelete {
+			nodeResults[i].NodeUTXO = nil
+			continue
+		}
 
 		// P2PKH dust output for this node.
 		nodeLockScript, err := BuildP2PKHScript(op.PubKey)

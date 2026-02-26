@@ -16,7 +16,7 @@ func TestMutationBatch_SingleOp(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:       BatchOpNodeUpdate,
+		Type:       OpUpdate,
 		PubKey:     pub,
 		ParentTxID: parentTxID,
 		Payload:    payload,
@@ -48,7 +48,7 @@ func TestMutationBatch_ParentUpdatePlusChildCreate(t *testing.T) {
 
 	// Op 0: parent update (spending existing P_parent UTXO).
 	batch.AddNodeOp(BatchNodeOp{
-		Type:       BatchOpParentUpdate,
+		Type:       OpUpdate,
 		PubKey:     parentPub,
 		ParentTxID: nil, // root dir has no parent
 		Payload:    []byte("updated parent directory payload"),
@@ -58,7 +58,7 @@ func TestMutationBatch_ParentUpdatePlusChildCreate(t *testing.T) {
 
 	// Op 1: child create (no existing UTXO).
 	batch.AddNodeOp(BatchNodeOp{
-		Type:       BatchOpChildCreate,
+		Type:       OpCreate,
 		PubKey:     childPub,
 		ParentTxID: parentTxID,
 		Payload:    []byte("new child node payload"),
@@ -93,7 +93,7 @@ func TestMutationBatch_MultipleCreates(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, pub := generateTestKeyPair(t)
 		batch.AddNodeOp(BatchNodeOp{
-			Type:       BatchOpChildCreate,
+			Type:       OpCreate,
 			PubKey:     pub,
 			ParentTxID: parentTxID,
 			Payload:    []byte("child create payload"),
@@ -132,7 +132,7 @@ func TestMutationBatch_NoFeeInputs_Error(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:    BatchOpChildCreate,
+		Type:    OpCreate,
 		PubKey:  pub,
 		Payload: []byte("test payload"),
 	})
@@ -147,7 +147,7 @@ func TestMutationBatch_InsufficientFunds(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:    BatchOpChildCreate,
+		Type:    OpCreate,
 		PubKey:  pub,
 		Payload: []byte("test payload"),
 	})
@@ -160,7 +160,7 @@ func TestMutationBatch_InsufficientFunds(t *testing.T) {
 func TestMutationBatch_NilPubKey_Error(t *testing.T) {
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:    BatchOpChildCreate,
+		Type:    OpCreate,
 		PubKey:  nil,
 		Payload: []byte("test"),
 	})
@@ -175,7 +175,7 @@ func TestMutationBatch_EmptyPayload_Error(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:    BatchOpChildCreate,
+		Type:    OpCreate,
 		PubKey:  pub,
 		Payload: []byte{},
 	})
@@ -190,7 +190,7 @@ func TestMutationBatch_InvalidParentTxID_Error(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:       BatchOpChildCreate,
+		Type:       OpCreate,
 		PubKey:     pub,
 		ParentTxID: []byte{0x01, 0x02}, // wrong length
 		Payload:    []byte("test"),
@@ -206,7 +206,7 @@ func TestMutationBatch_InputUTXOWithoutPrivKey_Error(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:       BatchOpNodeUpdate,
+		Type:       OpUpdate,
 		PubKey:     pub,
 		Payload:    []byte("test"),
 		InputUTXO:  &UTXO{TxID: bytes.Repeat([]byte{0x11}, 32), Vout: 0, Amount: DustLimit},
@@ -224,7 +224,7 @@ func TestMutationBatch_SetChangeAddr(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:    BatchOpChildCreate,
+		Type:    OpCreate,
 		PubKey:  pub,
 		Payload: []byte("test payload data"),
 	})
@@ -242,7 +242,7 @@ func TestMutationBatch_ChangeUnderDust(t *testing.T) {
 
 	batch := NewMutationBatch()
 	batch.AddNodeOp(BatchNodeOp{
-		Type:    BatchOpChildCreate,
+		Type:    OpCreate,
 		PubKey:  pub,
 		Payload: []byte("test payload data"),
 	})
@@ -258,4 +258,48 @@ func TestMutationBatch_ChangeUnderDust(t *testing.T) {
 	result, err := batch.Build()
 	require.NoError(t, err)
 	assert.Nil(t, result.ChangeUTXO, "change below dust should be suppressed")
+}
+
+func TestMutationBatch_OpCreateRoot(t *testing.T) {
+	// OpCreateRoot: no InputUTXO, produces OP_RETURN + P2PKH.
+	_, pub := generateTestKeyPair(t)
+
+	batch := NewMutationBatch()
+	batch.AddNodeOp(BatchNodeOp{
+		Type:    OpCreateRoot,
+		PubKey:  pub,
+		Payload: []byte("root-payload"),
+		// No InputUTXO, no PrivateKey, no ParentTxID
+	})
+	batch.AddFeeInput(testFeeUTXO(t, 5000))
+
+	result, err := batch.Build()
+	require.NoError(t, err)
+	require.Len(t, result.NodeOps, 1)
+	assert.Equal(t, uint32(0), result.NodeOps[0].OpReturnVout)
+	assert.Equal(t, uint32(1), result.NodeOps[0].NodeVout)
+	assert.NotNil(t, result.NodeOps[0].NodeUTXO)
+}
+
+func TestMutationBatch_OpDelete_NoRefresh(t *testing.T) {
+	// OpDelete: has InputUTXO (spent), produces OP_RETURN but NO P2PKH (node dies).
+	priv, pub := generateTestKeyPair(t)
+
+	batch := NewMutationBatch()
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpDelete,
+		PubKey:     pub,
+		ParentTxID: bytes.Repeat([]byte{0xaa}, 32),
+		Payload:    []byte("delete-payload"),
+		InputUTXO:  &UTXO{TxID: bytes.Repeat([]byte{0x01}, 32), Vout: 0, Amount: 1},
+		PrivateKey: priv,
+	})
+	batch.AddFeeInput(testFeeUTXO(t, 5000))
+
+	result, err := batch.Build()
+	require.NoError(t, err)
+	require.Len(t, result.NodeOps, 1)
+	assert.Equal(t, uint32(0), result.NodeOps[0].OpReturnVout)
+	// DELETE: NodeUTXO should be nil (no P2PKH refresh produced).
+	assert.Nil(t, result.NodeOps[0].NodeUTXO)
 }
