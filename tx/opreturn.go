@@ -19,7 +19,8 @@ const (
 	MetaFlag = "meta"
 
 	// DustLimit is the minimum P2PKH output value in satoshis.
-	DustLimit = uint64(546)
+	// BSV has removed the dust limit; 1 sat is the protocol minimum.
+	DustLimit = uint64(1)
 
 	// DefaultFeeRate is the default fee rate in sat/KB.
 	DefaultFeeRate = uint64(1)
@@ -38,7 +39,7 @@ const (
 //	pushdata[0]: MetaFlag    (4 bytes, "meta")
 //	pushdata[1]: P_node      (33 bytes, compressed pubkey)
 //	pushdata[2]: TxID_parent (0 bytes for root, 32 bytes otherwise)
-//	pushdata[3]: Payload     (variable length, Protobuf)
+//	pushdata[3]: Payload     (variable length, TLV-encoded)
 //
 // Returns the data pushes as a slice of byte slices.
 func BuildOPReturnData(pNode *ec.PublicKey, parentTxID []byte, payload []byte) ([][]byte, error) {
@@ -61,7 +62,7 @@ func BuildOPReturnData(pNode *ec.PublicKey, parentTxID []byte, payload []byte) (
 		MetaFlagBytes, // pushdata[0]: "meta"
 		pNodeBytes,    // pushdata[1]: P_node
 		parentTxID,    // pushdata[2]: TxID_parent (empty for root)
-		payload,       // pushdata[3]: Protobuf payload
+		payload,       // pushdata[3]: TLV payload
 	}
 
 	return pushes, nil

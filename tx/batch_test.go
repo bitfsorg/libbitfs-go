@@ -151,7 +151,7 @@ func TestMutationBatch_InsufficientFunds(t *testing.T) {
 		PubKey:  pub,
 		Payload: []byte("test payload"),
 	})
-	batch.AddFeeInput(testFeeUTXO(t, 10)) // way too little
+	batch.AddFeeInput(testFeeUTXO(t, 1)) // way too little
 
 	_, err := batch.Build()
 	assert.ErrorIs(t, err, ErrInsufficientFunds)
@@ -251,7 +251,7 @@ func TestMutationBatch_ChangeUnderDust(t *testing.T) {
 	numOutputs := 3 // 1 OP_RETURN + 1 P2PKH + 1 potential change
 	estSize := EstimateTxSize(1, numOutputs, len("test payload data"))
 	estFee := EstimateFee(estSize, 1)
-	feeAmount := DustLimit + estFee + 100 // change = 100 sat < dust
+	feeAmount := DustLimit + estFee + 1 // change = 1 sat <= dust
 
 	batch.AddFeeInput(testFeeUTXO(t, feeAmount))
 

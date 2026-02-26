@@ -30,7 +30,7 @@ func testFeeUTXO(t *testing.T, amount uint64) *UTXO {
 func TestBuildOPReturnData(t *testing.T) {
 	_, pubKey := generateTestKeyPair(t)
 	parentTxID := bytes.Repeat([]byte{0xab}, 32)
-	payload := []byte("test protobuf payload")
+	payload := []byte("test TLV payload")
 
 	pushes, err := BuildOPReturnData(pubKey, parentTxID, payload)
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestEstimateTxSize(t *testing.T) {
 
 func TestBuildCreateRoot(t *testing.T) {
 	_, nodePub := generateTestKeyPair(t)
-	payload := []byte("root node protobuf payload data")
+	payload := []byte("root node TLV payload data")
 
 	result, err := BuildCreateRoot(&CreateRootParams{
 		NodePubKey: nodePub,
@@ -228,7 +228,7 @@ func TestBuildCreateRoot_InsufficientFunds(t *testing.T) {
 	_, err := BuildCreateRoot(&CreateRootParams{
 		NodePubKey: nodePub,
 		Payload:    payload,
-		FeeUTXO:    testFeeUTXO(t, 100), // too little
+		FeeUTXO:    testFeeUTXO(t, 1), // too little
 		FeeRate:    1,
 	})
 	assert.ErrorIs(t, err, ErrInsufficientFunds)
@@ -264,7 +264,7 @@ func TestBuildCreateChild(t *testing.T) {
 	_, nodePub := generateTestKeyPair(t)
 	parentPriv, parentPub := generateTestKeyPair(t)
 	parentTxID := bytes.Repeat([]byte{0xaa}, 32)
-	payload := []byte("child node protobuf payload")
+	payload := []byte("child node TLV payload")
 
 	result, err := BuildCreateChild(&CreateChildParams{
 		NodePubKey:    nodePub,
@@ -305,7 +305,7 @@ func TestBuildCreateChild_InvalidParentTxID(t *testing.T) {
 func TestBuildSelfUpdate(t *testing.T) {
 	nodePriv, nodePub := generateTestKeyPair(t)
 	parentTxID := bytes.Repeat([]byte{0xbb}, 32)
-	payload := []byte("updated protobuf payload")
+	payload := []byte("updated TLV payload")
 
 	result, err := BuildSelfUpdate(&SelfUpdateParams{
 		NodePubKey:  nodePub,
@@ -376,7 +376,7 @@ func TestBuildDataTransaction_InsufficientFunds(t *testing.T) {
 	_, err := BuildDataTransaction(&DataTxParams{
 		NodePubKey: nodePub,
 		Content:    content,
-		SourceUTXO: testFeeUTXO(t, 100), // too little
+		SourceUTXO: testFeeUTXO(t, 1), // too little
 		FeeRate:    1,
 	})
 	assert.ErrorIs(t, err, ErrInsufficientFunds)
@@ -387,7 +387,7 @@ func TestBuildDataTransaction_InsufficientFunds(t *testing.T) {
 func TestConstants(t *testing.T) {
 	assert.Equal(t, []byte{0x6d, 0x65, 0x74, 0x61}, MetaFlagBytes)
 	assert.Equal(t, "meta", MetaFlag)
-	assert.Equal(t, uint64(546), DustLimit)
+	assert.Equal(t, uint64(1), DustLimit)
 	assert.Equal(t, 33, CompressedPubKeyLen)
 	assert.Equal(t, 32, TxIDLen)
 }
@@ -478,7 +478,7 @@ func TestBuildCreateChild_InsufficientFunds(t *testing.T) {
 		Payload:       []byte("child payload"),
 		ParentUTXO:    &UTXO{TxID: parentTxID, Vout: 1, Amount: DustLimit, PrivateKey: parentPriv},
 		ParentPrivKey: parentPriv,
-		FeeUTXO:       testFeeUTXO(t, 100), // too little -- combined with DustLimit still not enough
+		FeeUTXO:       testFeeUTXO(t, 1), // too little -- combined with DustLimit still not enough
 		ParentPubKey:  parentPub,
 		FeeRate:       1,
 	})
@@ -568,14 +568,14 @@ func TestBuildSelfUpdate_InsufficientFunds(t *testing.T) {
 	nodePriv, nodePub := generateTestKeyPair(t)
 	parentTxID := bytes.Repeat([]byte{0xbb}, 32)
 
-	// NodeUTXO.Amount=1 + FeeUTXO.Amount=1 = 2 sat total, far below DustLimit+fee (~547+)
+	// NodeUTXO.Amount=1 + FeeUTXO.Amount=0 = 1 sat total, below DustLimit+fee (~2)
 	_, err := BuildSelfUpdate(&SelfUpdateParams{
 		NodePubKey:  nodePub,
 		NodePrivKey: nodePriv,
 		ParentTxID:  parentTxID,
 		Payload:     []byte("update payload"),
 		NodeUTXO:    &UTXO{Amount: 1, PrivateKey: nodePriv},
-		FeeUTXO:     testFeeUTXO(t, 1), // too little
+		FeeUTXO:     testFeeUTXO(t, 0), // too little
 		FeeRate:     1,
 	})
 	assert.ErrorIs(t, err, ErrInsufficientFunds)
@@ -678,10 +678,10 @@ func TestBuildCreateRoot_ChangeUnderDust(t *testing.T) {
 	// estSize = EstimateTxSize(1, 3, len(payload))
 	// estFee  = EstimateFee(estSize, 1)
 	// totalNeeded = DustLimit + estFee
-	// We set FeeUTXO.Amount = totalNeeded + 100 (100 < DustLimit=546, so change is suppressed)
+	// We set FeeUTXO.Amount = totalNeeded + 1 (1 <= DustLimit=1, so change is suppressed)
 	estSize := EstimateTxSize(1, 3, len(payload))
 	estFee := EstimateFee(estSize, 1)
-	feeAmount := DustLimit + estFee + 100 // change = 100 sat, below dust
+	feeAmount := DustLimit + estFee + 1 // change = 1 sat, at dust limit
 
 	result, err := BuildCreateRoot(&CreateRootParams{
 		NodePubKey: nodePub,

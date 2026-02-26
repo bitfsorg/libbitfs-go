@@ -10,7 +10,7 @@ import (
 type CreateRootParams struct {
 	NodePubKey  *ec.PublicKey  // P_node for the root
 	NodePrivKey *ec.PrivateKey // D_node for UTXO tracking
-	Payload     []byte         // Protobuf-encoded BitFSPayload
+	Payload     []byte         // TLV-encoded BitFSPayload
 	FeeUTXO     *UTXO          // Fee chain UTXO to spend
 	ChangeAddr  []byte         // 20-byte P2PKH hash for change
 	FeeRate     uint64         // sat/KB (0 = use DefaultFeeRate)
@@ -20,7 +20,7 @@ type CreateRootParams struct {
 type CreateChildParams struct {
 	NodePubKey    *ec.PublicKey  // Child node's public key
 	ParentTxID    []byte         // Parent's latest TxID (32 bytes)
-	Payload       []byte         // Protobuf-encoded BitFSPayload
+	Payload       []byte         // TLV-encoded BitFSPayload
 	ParentUTXO    *UTXO          // P_parent UTXO to spend (Metanet edge)
 	ParentPrivKey *ec.PrivateKey // D_parent for Input 0 signing
 	FeeUTXO       *UTXO          // Fee chain UTXO
@@ -34,7 +34,7 @@ type SelfUpdateParams struct {
 	NodePubKey  *ec.PublicKey  // Node's public key
 	NodePrivKey *ec.PrivateKey // D_node for Input 0 signing
 	ParentTxID  []byte         // Original parent TxID (preserved)
-	Payload     []byte         // Updated Protobuf payload
+	Payload     []byte         // Updated TLV-encoded payload
 	NodeUTXO    *UTXO          // P_node's current UTXO
 	FeeUTXO     *UTXO          // Fee chain UTXO
 	ChangeAddr  []byte         // 20-byte P2PKH hash for change
@@ -58,7 +58,7 @@ type DataTxParams struct {
 // Outputs:
 //
 //	0: OP_FALSE OP_RETURN <MetaFlag> <P_node> <empty> <Payload>
-//	1: P2PKH -> P_node (dust, 546 sat)
+//	1: P2PKH -> P_node (dust, 1 sat)
 //	2: P2PKH -> Change
 //
 // This function builds the transaction structure and returns the component

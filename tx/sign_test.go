@@ -312,7 +312,7 @@ func TestBuildUnsignedCreateRootTx_InsufficientFunds(t *testing.T) {
 	feeUTXO := &UTXO{
 		TxID:         bytes.Repeat([]byte{0x01}, 32),
 		Vout:         0,
-		Amount:       100, // too little
+		Amount:       1, // too little
 		ScriptPubKey: scriptBytes,
 	}
 
