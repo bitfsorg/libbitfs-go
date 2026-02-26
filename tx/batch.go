@@ -393,3 +393,49 @@ func (b *MutationBatch) Sign(result *BatchResult) (string, error) {
 func (b *MutationBatch) OpCount() int {
 	return len(b.ops)
 }
+
+// AddCreateChild adds an OpCreate op for a new child node.
+// The parentUTXO is the parent's P_node UTXO to spend (Metanet edge).
+func (b *MutationBatch) AddCreateChild(childPub *ec.PublicKey, parentTxID []byte, payload []byte, parentUTXO *UTXO, parentPriv *ec.PrivateKey) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:       OpCreate,
+		PubKey:     childPub,
+		ParentTxID: parentTxID,
+		Payload:    payload,
+		InputUTXO:  parentUTXO,
+		PrivateKey: parentPriv,
+	})
+}
+
+// AddSelfUpdate adds an OpUpdate op for updating an existing node.
+func (b *MutationBatch) AddSelfUpdate(nodePub *ec.PublicKey, parentTxID []byte, payload []byte, nodeUTXO *UTXO, nodePriv *ec.PrivateKey) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:       OpUpdate,
+		PubKey:     nodePub,
+		ParentTxID: parentTxID,
+		Payload:    payload,
+		InputUTXO:  nodeUTXO,
+		PrivateKey: nodePriv,
+	})
+}
+
+// AddDelete adds an OpDelete op. The node's UTXO is spent but no refresh is produced.
+func (b *MutationBatch) AddDelete(nodePub *ec.PublicKey, parentTxID []byte, payload []byte, nodeUTXO *UTXO, nodePriv *ec.PrivateKey) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:       OpDelete,
+		PubKey:     nodePub,
+		ParentTxID: parentTxID,
+		Payload:    payload,
+		InputUTXO:  nodeUTXO,
+		PrivateKey: nodePriv,
+	})
+}
+
+// AddCreateRoot adds an OpCreateRoot op. No input UTXO needed.
+func (b *MutationBatch) AddCreateRoot(rootPub *ec.PublicKey, payload []byte) {
+	b.AddNodeOp(BatchNodeOp{
+		Type:    OpCreateRoot,
+		PubKey:  rootPub,
+		Payload: payload,
+	})
+}

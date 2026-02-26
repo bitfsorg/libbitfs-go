@@ -445,3 +445,44 @@ func TestMutationBatch_Sign_MultiOp_WithDedup(t *testing.T) {
 		assert.NotNil(t, result.ChangeUTXO.TxID)
 	}
 }
+
+func TestMutationBatch_ConvenienceBuilders(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, childPub := generateTestKeyPair(t)
+	parentTxID := bytes.Repeat([]byte{0xaa}, 32)
+	utxo := &UTXO{TxID: bytes.Repeat([]byte{0x01}, 32), Vout: 1, Amount: 1}
+
+	t.Run("AddCreateChild", func(t *testing.T) {
+		batch := NewMutationBatch()
+		batch.AddCreateChild(childPub, parentTxID, []byte("payload"), utxo, priv)
+		assert.Equal(t, 1, batch.OpCount())
+	})
+
+	t.Run("AddSelfUpdate", func(t *testing.T) {
+		batch := NewMutationBatch()
+		batch.AddSelfUpdate(pub, parentTxID, []byte("payload"), utxo, priv)
+		assert.Equal(t, 1, batch.OpCount())
+	})
+
+	t.Run("AddDelete", func(t *testing.T) {
+		batch := NewMutationBatch()
+		batch.AddDelete(pub, parentTxID, []byte("payload"), utxo, priv)
+		assert.Equal(t, 1, batch.OpCount())
+	})
+
+	t.Run("AddCreateRoot", func(t *testing.T) {
+		batch := NewMutationBatch()
+		batch.AddCreateRoot(pub, []byte("payload"))
+		assert.Equal(t, 1, batch.OpCount())
+	})
+
+	t.Run("BuildWithConvenienceBuilders", func(t *testing.T) {
+		batch := NewMutationBatch()
+		batch.AddCreateRoot(pub, []byte("root-payload"))
+		batch.AddFeeInput(testFeeUTXO(t, 5000))
+		result, err := batch.Build()
+		require.NoError(t, err)
+		assert.Len(t, result.NodeOps, 1)
+		assert.NotNil(t, result.NodeOps[0].NodeUTXO)
+	})
+}
