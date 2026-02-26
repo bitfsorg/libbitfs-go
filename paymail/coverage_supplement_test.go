@@ -50,7 +50,7 @@ func TestResolveURI_DelegatesToWith(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_EmptyTXTRecordList(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com") // empty list
+	resolver.addTXT("_bitfs.example.com") // empty list
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrDNSLookupFailed)
 }
@@ -240,7 +240,7 @@ func TestResolveURIWith_PubKey_NilEndpoints(t *testing.T) {
 func TestResolveDNSLinkPubKey_MultipleRecords_FirstValidWins(t *testing.T) {
 	altKey := "03" + strings.Repeat("cd", 32)
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex, altKey)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex, "bitfs="+altKey)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)

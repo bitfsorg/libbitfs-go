@@ -333,7 +333,7 @@ func TestResolveEndpoints_NoRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_Success(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)
@@ -363,14 +363,14 @@ func TestResolveDNSLinkPubKey_NoRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_InvalidHex(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "not-valid-hex!")
+	resolver.addTXT("_bitfs.example.com", "bitfs=not-valid-hex!")
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrInvalidPubKey)
 }
 
 func TestResolveDNSLinkPubKey_WrongLength(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "02a1b2c3") // too short
+	resolver.addTXT("_bitfs.example.com", "bitfs=02a1b2c3") // too short
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrInvalidPubKey)
 }
@@ -379,7 +379,7 @@ func TestResolveDNSLinkPubKey_WrongPrefix(t *testing.T) {
 	resolver := newMockDNSResolver()
 	// 33 bytes but starts with 04 (uncompressed prefix)
 	badKey := "04" + strings.Repeat("ab", 32)
-	resolver.addTXT("_bitfs_pubkey.example.com", badKey)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+badKey)
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.ErrorIs(t, err, ErrInvalidPubKey)
 }
@@ -545,7 +545,7 @@ func TestResolveURI_Paymail_NoSRV_Fallback(t *testing.T) {
 
 func TestResolveURI_DNSLink(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex)
 	resolver.addSRV("bitfs", "tcp", "example.com",
 		&net.SRV{Target: "node1.example.com.", Port: 443, Priority: 10, Weight: 60},
 	)
@@ -750,7 +750,7 @@ func TestParseURI_PubKeyLooksLikeDNSLink(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_SkipsEmptyTXTRecords(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "", "", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "", "", "bitfs="+testPubKeyHex)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)
@@ -760,7 +760,7 @@ func TestResolveDNSLinkPubKey_SkipsEmptyTXTRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_AllEmptyTXTRecords(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", "", "", "")
+	resolver.addTXT("_bitfs.example.com", "", "", "")
 
 	_, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	assert.Error(t, err)
@@ -769,8 +769,8 @@ func TestResolveDNSLinkPubKey_AllEmptyTXTRecords(t *testing.T) {
 
 func TestResolveDNSLinkPubKey_WhitespaceTrimming(t *testing.T) {
 	resolver := newMockDNSResolver()
-	padded := "  " + testPubKeyHex + "  "
-	resolver.addTXT("_bitfs_pubkey.example.com", padded)
+	padded := "  bitfs=" + testPubKeyHex + "  "
+	resolver.addTXT("_bitfs.example.com", padded)
 
 	pubKey, err := ResolveDNSLinkPubKeyWithResolver("example.com", resolver)
 	require.NoError(t, err)
@@ -882,7 +882,7 @@ func TestResolvePKI_PKIEndpointInvalidJSON(t *testing.T) {
 
 func TestResolveURI_DNSLink_NoSRV_Fallback(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.addTXT("_bitfs_pubkey.example.com", testPubKeyHex)
+	resolver.addTXT("_bitfs.example.com", "bitfs="+testPubKeyHex)
 	// No SRV records added -- should fall back to domain:443
 
 	pubKey, endpoints, err := ResolveURIWith("bitfs://example.com/docs", DefaultHTTPClient, resolver)
