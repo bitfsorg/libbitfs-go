@@ -89,6 +89,32 @@ const (
 	AccessPaid AccessLevel = 2
 )
 
+// CompressionScheme constants for the Compression field.
+const (
+	CompressNone int32 = 0
+	CompressLZW  int32 = 1
+	CompressGZIP int32 = 2
+	CompressZSTD int32 = 3
+)
+
+// ISOStatus represents the state of an Initial Share Offering.
+type ISOStatus uint8
+
+const (
+	ISOStatusNone    ISOStatus = 0
+	ISOStatusOpen    ISOStatus = 1
+	ISOStatusPartial ISOStatus = 2
+	ISOStatusClosed  ISOStatus = 3
+)
+
+// ISOConfig holds ISO (Initial Share Offering) parameters.
+type ISOConfig struct {
+	TotalShares   uint64
+	PricePerShare uint64
+	CreatorAddr   []byte    // 20 bytes P2PKH hash
+	Status        ISOStatus
+}
+
 // ChildEntry represents a directory entry (Unix dirent).
 type ChildEntry struct {
 	Index    uint32   // Child's index within parent directory
@@ -126,16 +152,27 @@ type Node struct {
 	Keywords       string
 	Description    string
 	Metadata       map[string]string
-	Encrypted      bool
-	PrivateKeyHash []byte
-	EncPayload     []byte
-	PrivateFileIdx uint32
-	OnChain        bool
+	Encrypted  bool
+	EncPayload []byte // PRIVATE mode: nonce(12B) || AES-256-GCM(full TLV) || tag(16B)
+	OnChain    bool
 	ContentTxIDs   [][]byte
 	Compression    int32
 	CltvHeight     uint32
 	RevenueShare   uint32
 	NetworkName    string
+
+	// Extended fields (Protocol Layer Completion)
+	VersionLog        []byte     // P_node pointing to version log node (33 bytes)
+	ShareList         []byte     // P_node pointing to share list node (33 bytes)
+	ChunkIndex        uint32     // Chunk index (0-based) for chunked content
+	TotalChunks       uint32     // Total number of chunks (0 = not chunked)
+	RecombinationHash []byte     // SHA256(chunk₀ ‖ chunk₁ ‖ ...) (32 bytes)
+	RabinSignature    []byte     // Rabin signature (S, U) serialized
+	RabinPubKey       []byte     // Rabin public key (modulus n)
+	RegistryTxID      []byte     // Registry UTXO TxID (32 bytes)
+	RegistryVout      uint32     // Registry UTXO output index
+	ISO               *ISOConfig // ISO configuration (nil = no ISO)
+	ACLRef            []byte     // ACL reference (group pubkey hash or ACL TxID)
 
 	// Anchor-specific fields (NodeTypeAnchor only)
 	TreeRootPNode    []byte   // Root directory's P_node (33 bytes)

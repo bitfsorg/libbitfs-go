@@ -38,6 +38,20 @@ const (
 	tagMerkleRoot     = 0x1A // 32 bytes, directory Merkle root of children
 	tagEncPayload     = 0x1B // inline encrypted content (small files)
 
+	// Extended fields (skip 0x1C-0x1D reserved, 0x20-0x26 used by Anchor)
+	tagMetadata          = 0x1E // map<string,string> sub-TLV
+	tagVersionLog        = 0x1F // bytes(33), P_node
+	tagShareList         = 0x27 // bytes(33), P_node — skips 0x20-0x26 Anchor range
+	tagChunkIndex        = 0x28 // uint32
+	tagTotalChunks       = 0x29 // uint32
+	tagRecombinationHash = 0x2A // bytes(32)
+	tagRabinSignature    = 0x2B // bytes (variable)
+	tagRabinPubKey       = 0x2C // bytes (variable)
+	tagRegistryTxID      = 0x2D // bytes(32)
+	tagRegistryVout      = 0x2E // uint32
+	tagISOConfig         = 0x2F // bytes (sub-TLV, 37 bytes)
+	tagACLRef            = 0x30 // bytes (variable)
+
 	// Anchor node tags (NodeTypeAnchor)
 	tagTreeRootPNode    = 0x20 // 33 bytes, root directory's P_node
 	tagTreeRootTxID     = 0x21 // 32 bytes, root directory's latest TxID
