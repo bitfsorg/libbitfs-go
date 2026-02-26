@@ -23,4 +23,7 @@ var (
 
 	// ErrUnsupportedCompression indicates an unsupported compression scheme.
 	ErrUnsupportedCompression = errors.New("storage: unsupported compression scheme")
+
+	// ErrRecombinationHashMismatch indicates chunk recombination hash verification failed.
+	ErrRecombinationHashMismatch = errors.New("storage: recombination hash mismatch")
 )
