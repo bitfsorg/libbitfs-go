@@ -234,6 +234,12 @@ func SerializePayload(node *Node) ([]byte, error) {
 		buf = appendBytesField(buf, tagEncPayload, node.EncPayload)
 	}
 
+	// Metadata (extended)
+	if len(node.Metadata) > 0 {
+		metaBytes := serializeMetadata(node.Metadata)
+		buf = appendBytesField(buf, tagMetadata, metaBytes)
+	}
+
 	// Anchor-specific fields (NodeTypeAnchor only)
 	if len(node.TreeRootPNode) > 0 {
 		buf = appendBytesField(buf, tagTreeRootPNode, node.TreeRootPNode)
@@ -293,6 +299,51 @@ func appendBytesField(buf []byte, tag byte, data []byte) []byte {
 	buf = append(buf, tag)
 	buf = appendUvarint(buf, uint64(len(data)))
 	return append(buf, data...)
+}
+
+func serializeMetadata(m map[string]string) []byte {
+	var buf []byte
+	for k, v := range m {
+		kb := []byte(k)
+		vb := []byte(v)
+		kLen := make([]byte, 2)
+		binary.LittleEndian.PutUint16(kLen, uint16(len(kb)))
+		buf = append(buf, kLen...)
+		buf = append(buf, kb...)
+		vLen := make([]byte, 2)
+		binary.LittleEndian.PutUint16(vLen, uint16(len(vb)))
+		buf = append(buf, vLen...)
+		buf = append(buf, vb...)
+	}
+	return buf
+}
+
+func deserializeMetadata(data []byte) (map[string]string, error) {
+	m := make(map[string]string)
+	offset := 0
+	for offset < len(data) {
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("metadata: truncated key length at offset %d", offset)
+		}
+		kLen := int(binary.LittleEndian.Uint16(data[offset : offset+2]))
+		offset += 2
+		if offset+kLen > len(data) {
+			return nil, fmt.Errorf("metadata: truncated key at offset %d", offset)
+		}
+		key := string(data[offset : offset+kLen])
+		offset += kLen
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("metadata: truncated value length at offset %d", offset)
+		}
+		vLen := int(binary.LittleEndian.Uint16(data[offset : offset+2]))
+		offset += 2
+		if offset+vLen > len(data) {
+			return nil, fmt.Errorf("metadata: truncated value at offset %d", offset)
+		}
+		m[key] = string(data[offset : offset+vLen])
+		offset += vLen
+	}
+	return m, nil
 }
 
 func serializeChildEntry(entry *ChildEntry) []byte {
@@ -451,6 +502,14 @@ func deserializePayload(data []byte, node *Node) error {
 		case tagEncPayload:
 			node.EncPayload = make([]byte, length)
 			copy(node.EncPayload, value)
+		case tagMetadata:
+			meta, err := deserializeMetadata(value)
+			if err != nil {
+				return fmt.Errorf("invalid metadata: %w", err)
+			}
+			for k, v := range meta {
+				node.Metadata[k] = v
+			}
 
 		// Anchor node fields
 		case tagTreeRootPNode:
