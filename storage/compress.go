@@ -51,8 +51,11 @@ func compressLZW(data []byte) ([]byte, error) {
 
 func decompressLZW(data []byte) ([]byte, error) {
 	r := lzw.NewReader(bytes.NewReader(data), lzw.LSB, 8)
-	defer r.Close()
-	return io.ReadAll(r)
+	result, err := io.ReadAll(r)
+	if closeErr := r.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	return result, err
 }
 
 func compressGZIP(data []byte) ([]byte, error) {
@@ -72,6 +75,9 @@ func decompressGZIP(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
-	return io.ReadAll(r)
+	result, readErr := io.ReadAll(r)
+	if closeErr := r.Close(); closeErr != nil && readErr == nil {
+		readErr = closeErr
+	}
+	return result, readErr
 }

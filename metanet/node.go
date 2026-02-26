@@ -111,7 +111,7 @@ const (
 type ISOConfig struct {
 	TotalShares   uint64
 	PricePerShare uint64
-	CreatorAddr   []byte    // 20 bytes P2PKH hash
+	CreatorAddr   []byte // 20 bytes P2PKH hash
 	Status        ISOStatus
 }
 
@@ -152,9 +152,9 @@ type Node struct {
 	Keywords       string
 	Description    string
 	Metadata       map[string]string
-	Encrypted  bool
-	EncPayload []byte // PRIVATE mode: nonce(12B) || AES-256-GCM(full TLV) || tag(16B)
-	OnChain    bool
+	Encrypted      bool
+	EncPayload     []byte // PRIVATE mode: nonce(12B) || AES-256-GCM(full TLV) || tag(16B)
+	OnChain        bool
 	ContentTxIDs   [][]byte
 	Compression    int32
 	CltvHeight     uint32

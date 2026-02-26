@@ -46,13 +46,13 @@ func generateBlumPrime(bitSize int) (*big.Int, error) {
 
 // RabinSign signs a message using the Rabin signature scheme.
 // Returns (S, U) where S is the signature and U is the padding.
-func RabinSign(key *RabinKeyPair, message []byte) (S *big.Int, U []byte, err error) {
+func RabinSign(key *RabinKeyPair, message []byte) (*big.Int, []byte, error) {
 	// Find padding U such that H(message || U) is a quadratic residue mod n
 	for counter := uint32(0); ; counter++ {
-		padding := make([]byte, 4)
-		binary.BigEndian.PutUint32(padding, counter)
+		pad := make([]byte, 4)
+		binary.BigEndian.PutUint32(pad, counter)
 
-		h := rabinHash(message, padding, key.N)
+		h := rabinHash(message, pad, key.N)
 
 		// Check if h is a quadratic residue mod p and mod q
 		if !isQuadraticResidue(h, key.P) || !isQuadraticResidue(h, key.Q) {
@@ -64,16 +64,15 @@ func RabinSign(key *RabinKeyPair, message []byte) (S *big.Int, U []byte, err err
 		sq := modSqrtBlum(h, key.Q)
 
 		// CRT reconstruction
-		S = crt(sp, sq, key.P, key.Q, key.N)
-		U = padding
-		return S, U, nil
+		sig := crt(sp, sq, key.P, key.Q, key.N)
+		return sig, pad, nil
 	}
 }
 
 // RabinVerify verifies a Rabin signature using only the public modulus n.
-func RabinVerify(n *big.Int, message []byte, S *big.Int, U []byte) bool {
-	h := rabinHash(message, U, n)
-	s2 := new(big.Int).Mul(S, S)
+func RabinVerify(n *big.Int, message []byte, sig *big.Int, pad []byte) bool {
+	h := rabinHash(message, pad, n)
+	s2 := new(big.Int).Mul(sig, sig)
 	s2.Mod(s2, n)
 	return s2.Cmp(h) == 0
 }
@@ -119,19 +118,19 @@ func crt(sp, sq, p, q, n *big.Int) *big.Int {
 // --- Serialization ---
 
 // SerializeRabinSignature encodes (S, U) for TLV storage.
-func SerializeRabinSignature(S *big.Int, U []byte) []byte {
-	sBytes := S.Bytes()
-	buf := make([]byte, 4+len(sBytes)+4+len(U))
+func SerializeRabinSignature(sig *big.Int, pad []byte) []byte {
+	sBytes := sig.Bytes()
+	buf := make([]byte, 4+len(sBytes)+4+len(pad))
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(sBytes)))
 	copy(buf[4:4+len(sBytes)], sBytes)
 	offset := 4 + len(sBytes)
-	binary.BigEndian.PutUint32(buf[offset:offset+4], uint32(len(U)))
-	copy(buf[offset+4:], U)
+	binary.BigEndian.PutUint32(buf[offset:offset+4], uint32(len(pad)))
+	copy(buf[offset+4:], pad)
 	return buf
 }
 
 // DeserializeRabinSignature decodes (S, U) from TLV.
-func DeserializeRabinSignature(data []byte) (S *big.Int, U []byte, err error) {
+func DeserializeRabinSignature(data []byte) (*big.Int, []byte, error) {
 	if len(data) < 8 {
 		return nil, nil, fmt.Errorf("rabin signature data too short")
 	}
@@ -139,15 +138,15 @@ func DeserializeRabinSignature(data []byte) (S *big.Int, U []byte, err error) {
 	if 4+sLen+4 > len(data) {
 		return nil, nil, fmt.Errorf("rabin signature S truncated")
 	}
-	S = new(big.Int).SetBytes(data[4 : 4+sLen])
+	sig := new(big.Int).SetBytes(data[4 : 4+sLen])
 	offset := 4 + sLen
 	uLen := int(binary.BigEndian.Uint32(data[offset : offset+4]))
 	if offset+4+uLen > len(data) {
 		return nil, nil, fmt.Errorf("rabin signature U truncated")
 	}
-	U = make([]byte, uLen)
-	copy(U, data[offset+4:offset+4+uLen])
-	return S, U, nil
+	pad := make([]byte, uLen)
+	copy(pad, data[offset+4:offset+4+uLen])
+	return sig, pad, nil
 }
 
 // SerializeRabinPubKey encodes modulus n for TLV storage.
