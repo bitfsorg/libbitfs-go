@@ -131,3 +131,86 @@ func TestDeserializeISOPool_WrongSize(t *testing.T) {
 	_, err := DeserializeISOPool([]byte{0x01})
 	assert.ErrorIs(t, err, ErrInvalidISOPoolData)
 }
+
+// --- Distribution tests ---
+
+func TestDistributeRevenue(t *testing.T) {
+	tests := []struct {
+		name         string
+		totalPayment uint64
+		entries      []RevShareEntry
+		totalShares  uint64
+		wantAmounts  []uint64
+	}{
+		{
+			"exact division",
+			10000,
+			[]RevShareEntry{
+				{Address: makeAddr(0xAA), Share: 3000},
+				{Address: makeAddr(0xBB), Share: 2000},
+				{Address: makeAddr(0xCC), Share: 5000},
+			},
+			10000,
+			[]uint64{3000, 2000, 5000},
+		},
+		{
+			"remainder goes to last",
+			10,
+			[]RevShareEntry{
+				{Address: makeAddr(0xAA), Share: 3333},
+				{Address: makeAddr(0xBB), Share: 3333},
+				{Address: makeAddr(0xCC), Share: 3334},
+			},
+			10000,
+			[]uint64{3, 3, 4}, // 3+3+4=10, last gets remainder
+		},
+		{
+			"single shareholder",
+			5000,
+			[]RevShareEntry{
+				{Address: makeAddr(0xAA), Share: 10000},
+			},
+			10000,
+			[]uint64{5000},
+		},
+		{
+			"two shareholders equal",
+			100,
+			[]RevShareEntry{
+				{Address: makeAddr(0xAA), Share: 5000},
+				{Address: makeAddr(0xBB), Share: 5000},
+			},
+			10000,
+			[]uint64{50, 50},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dists, err := DistributeRevenue(tt.totalPayment, tt.entries, tt.totalShares)
+			require.NoError(t, err)
+			require.Len(t, dists, len(tt.entries))
+
+			var total uint64
+			for i, d := range dists {
+				assert.Equal(t, tt.entries[i].Address, d.Address)
+				assert.Equal(t, tt.wantAmounts[i], d.Amount, "entry %d", i)
+				total += d.Amount
+			}
+			assert.Equal(t, tt.totalPayment, total, "total payout must equal totalPayment")
+		})
+	}
+}
+
+func TestDistributeRevenue_Errors(t *testing.T) {
+	entries := []RevShareEntry{{Address: makeAddr(0xAA), Share: 5000}}
+
+	_, err := DistributeRevenue(0, entries, 10000)
+	assert.ErrorIs(t, err, ErrInsufficientPayment)
+
+	_, err = DistributeRevenue(100, nil, 10000)
+	assert.ErrorIs(t, err, ErrNoEntries)
+
+	_, err = DistributeRevenue(100, entries, 0)
+	assert.ErrorIs(t, err, ErrZeroTotalShares)
+}
