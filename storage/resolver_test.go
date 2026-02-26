@@ -1,0 +1,173 @@
+package storage
+
+import (
+	"crypto/sha256"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// testKeyHash returns a valid 32-byte key hash for testing.
+func testKeyHash(data []byte) []byte {
+	h := sha256.Sum256(data)
+	return h[:]
+}
+
+func TestContentResolver_FetchFromLocalStore(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	keyHash := testKeyHash([]byte("hello"))
+	ciphertext := []byte("encrypted-hello")
+	require.NoError(t, store.Put(keyHash, ciphertext))
+
+	r := NewContentResolver(store)
+	data, err := r.Fetch(keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, data)
+}
+
+func TestContentResolver_FetchFromEndpoint(t *testing.T) {
+	keyHash := testKeyHash([]byte("remote-file"))
+	ciphertext := []byte("remote-encrypted-data")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(ciphertext)
+	}))
+	defer srv.Close()
+
+	// No local store — forces endpoint fetch.
+	r := &ContentResolver{
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	data, err := r.Fetch(keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, data)
+}
+
+func TestContentResolver_FetchCachesLocally(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	keyHash := testKeyHash([]byte("cache-me"))
+	ciphertext := []byte("cached-cipher")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(ciphertext)
+	}))
+	defer srv.Close()
+
+	r := &ContentResolver{
+		Store:     store,
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	// First fetch: from endpoint (not in local store).
+	data, err := r.Fetch(keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, data)
+
+	// Verify it was cached locally.
+	cached, err := store.Get(keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, cached)
+}
+
+func TestContentResolver_FetchLocalPriority(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	keyHash := testKeyHash([]byte("local-first"))
+	localData := []byte("local-version")
+	require.NoError(t, store.Put(keyHash, localData))
+
+	endpointCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		endpointCalled = true
+		_, _ = w.Write([]byte("remote-version"))
+	}))
+	defer srv.Close()
+
+	r := &ContentResolver{
+		Store:     store,
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	data, err := r.Fetch(keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, localData, data)
+	assert.False(t, endpointCalled, "should not contact endpoint when local has data")
+}
+
+func TestContentResolver_FetchAllSourcesFail(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	keyHash := testKeyHash([]byte("missing"))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	r := &ContentResolver{
+		Store:     store,
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	_, err = r.Fetch(keyHash)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestContentResolver_FetchInvalidKeyHash(t *testing.T) {
+	r := NewContentResolver(nil)
+
+	_, err := r.Fetch([]byte("short"))
+	assert.ErrorIs(t, err, ErrInvalidKeyHash)
+}
+
+func TestContentResolver_FetchNoSources(t *testing.T) {
+	r := &ContentResolver{} // no store, no endpoints
+
+	keyHash := testKeyHash([]byte("nowhere"))
+	_, err := r.Fetch(keyHash)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestContentResolver_FetchEndpointFallback(t *testing.T) {
+	keyHash := testKeyHash([]byte("fallback-test"))
+	ciphertext := []byte("from-second-endpoint")
+
+	// First endpoint fails, second succeeds.
+	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer fail.Close()
+
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(ciphertext)
+	}))
+	defer ok.Close()
+
+	r := &ContentResolver{
+		Endpoints: []string{fail.URL, ok.URL},
+		Client:    &http.Client{},
+	}
+
+	data, err := r.Fetch(keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, data)
+}
