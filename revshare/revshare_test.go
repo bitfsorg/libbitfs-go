@@ -214,3 +214,74 @@ func TestDistributeRevenue_Errors(t *testing.T) {
 	_, err = DistributeRevenue(100, entries, 0)
 	assert.ErrorIs(t, err, ErrZeroTotalShares)
 }
+
+// --- Validation tests ---
+
+func TestValidateShareConservation(t *testing.T) {
+	nodeID := makeNodeID(0x01)
+
+	// Valid transfer (1:1)
+	inputs := []ShareData{{NodeID: nodeID, Amount: 3000}}
+	outputs := []ShareData{{NodeID: nodeID, Amount: 3000}}
+	assert.NoError(t, ValidateShareConservation(inputs, outputs))
+
+	// Valid split (1:2)
+	outputs = []ShareData{
+		{NodeID: nodeID, Amount: 2000},
+		{NodeID: nodeID, Amount: 1000},
+	}
+	assert.NoError(t, ValidateShareConservation(inputs, outputs))
+
+	// Valid merge (2:1)
+	inputs = []ShareData{
+		{NodeID: nodeID, Amount: 2000},
+		{NodeID: nodeID, Amount: 1000},
+	}
+	outputs = []ShareData{{NodeID: nodeID, Amount: 3000}}
+	assert.NoError(t, ValidateShareConservation(inputs, outputs))
+
+	// Invalid: shares created
+	inputs = []ShareData{{NodeID: nodeID, Amount: 1000}}
+	outputs = []ShareData{{NodeID: nodeID, Amount: 2000}}
+	assert.ErrorIs(t, ValidateShareConservation(inputs, outputs), ErrShareConservationViolation)
+
+	// Invalid: shares destroyed
+	inputs = []ShareData{{NodeID: nodeID, Amount: 2000}}
+	outputs = []ShareData{{NodeID: nodeID, Amount: 1000}}
+	assert.ErrorIs(t, ValidateShareConservation(inputs, outputs), ErrShareConservationViolation)
+}
+
+func TestValidateDistribution(t *testing.T) {
+	entries := []RevShareEntry{
+		{Address: makeAddr(0xAA), Share: 3000},
+		{Address: makeAddr(0xBB), Share: 7000},
+	}
+
+	// Valid distribution
+	dists := []Distribution{
+		{Address: makeAddr(0xAA), Amount: 3000},
+		{Address: makeAddr(0xBB), Amount: 7000},
+	}
+	assert.NoError(t, ValidateDistribution(dists, entries, 10000, 10000))
+
+	// Wrong amount
+	dists[0].Amount = 5000
+	assert.Error(t, ValidateDistribution(dists, entries, 10000, 10000))
+}
+
+func TestRegistryState_FindEntry(t *testing.T) {
+	state := &RegistryState{
+		Entries: []RevShareEntry{
+			{Address: makeAddr(0xAA), Share: 3000},
+			{Address: makeAddr(0xBB), Share: 7000},
+		},
+	}
+
+	idx, entry := state.FindEntry(makeAddr(0xBB))
+	assert.Equal(t, 1, idx)
+	assert.Equal(t, uint64(7000), entry.Share)
+
+	idx, entry = state.FindEntry(makeAddr(0xCC))
+	assert.Equal(t, -1, idx)
+	assert.Nil(t, entry)
+}
