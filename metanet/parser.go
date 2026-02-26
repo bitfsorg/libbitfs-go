@@ -240,6 +240,52 @@ func SerializePayload(node *Node) ([]byte, error) {
 		buf = appendBytesField(buf, tagMetadata, metaBytes)
 	}
 
+	// VersionLog
+	if len(node.VersionLog) > 0 {
+		buf = appendBytesField(buf, tagVersionLog, node.VersionLog)
+	}
+	// ShareList
+	if len(node.ShareList) > 0 {
+		buf = appendBytesField(buf, tagShareList, node.ShareList)
+	}
+	// ChunkIndex
+	if node.ChunkIndex > 0 {
+		buf = appendUint32Field(buf, tagChunkIndex, node.ChunkIndex)
+	}
+	// TotalChunks
+	if node.TotalChunks > 0 {
+		buf = appendUint32Field(buf, tagTotalChunks, node.TotalChunks)
+	}
+	// RecombinationHash
+	if len(node.RecombinationHash) > 0 {
+		buf = appendBytesField(buf, tagRecombinationHash, node.RecombinationHash)
+	}
+	// RabinSignature
+	if len(node.RabinSignature) > 0 {
+		buf = appendBytesField(buf, tagRabinSignature, node.RabinSignature)
+	}
+	// RabinPubKey
+	if len(node.RabinPubKey) > 0 {
+		buf = appendBytesField(buf, tagRabinPubKey, node.RabinPubKey)
+	}
+	// RegistryTxID
+	if len(node.RegistryTxID) > 0 {
+		buf = appendBytesField(buf, tagRegistryTxID, node.RegistryTxID)
+	}
+	// RegistryVout
+	if node.RegistryVout > 0 {
+		buf = appendUint32Field(buf, tagRegistryVout, node.RegistryVout)
+	}
+	// ISOConfig
+	if node.ISO != nil {
+		isoBytes := serializeISOConfig(node.ISO)
+		buf = appendBytesField(buf, tagISOConfig, isoBytes)
+	}
+	// ACLRef
+	if len(node.ACLRef) > 0 {
+		buf = appendBytesField(buf, tagACLRef, node.ACLRef)
+	}
+
 	// Anchor-specific fields (NodeTypeAnchor only)
 	if len(node.TreeRootPNode) > 0 {
 		buf = appendBytesField(buf, tagTreeRootPNode, node.TreeRootPNode)
@@ -344,6 +390,29 @@ func deserializeMetadata(data []byte) (map[string]string, error) {
 		offset += vLen
 	}
 	return m, nil
+}
+
+func serializeISOConfig(iso *ISOConfig) []byte {
+	buf := make([]byte, 37) // 8+8+20+1
+	binary.LittleEndian.PutUint64(buf[0:8], iso.TotalShares)
+	binary.LittleEndian.PutUint64(buf[8:16], iso.PricePerShare)
+	copy(buf[16:36], iso.CreatorAddr)
+	buf[36] = byte(iso.Status)
+	return buf
+}
+
+func deserializeISOConfig(data []byte) (*ISOConfig, error) {
+	if len(data) != 37 {
+		return nil, fmt.Errorf("ISO config must be 37 bytes, got %d", len(data))
+	}
+	iso := &ISOConfig{
+		TotalShares:   binary.LittleEndian.Uint64(data[0:8]),
+		PricePerShare: binary.LittleEndian.Uint64(data[8:16]),
+		CreatorAddr:   make([]byte, 20),
+		Status:        ISOStatus(data[36]),
+	}
+	copy(iso.CreatorAddr, data[16:36])
+	return iso, nil
 }
 
 func serializeChildEntry(entry *ChildEntry) []byte {
@@ -510,6 +579,45 @@ func deserializePayload(data []byte, node *Node) error {
 			for k, v := range meta {
 				node.Metadata[k] = v
 			}
+		case tagVersionLog:
+			node.VersionLog = make([]byte, length)
+			copy(node.VersionLog, value)
+		case tagShareList:
+			node.ShareList = make([]byte, length)
+			copy(node.ShareList, value)
+		case tagChunkIndex:
+			if length == 4 {
+				node.ChunkIndex = binary.LittleEndian.Uint32(value)
+			}
+		case tagTotalChunks:
+			if length == 4 {
+				node.TotalChunks = binary.LittleEndian.Uint32(value)
+			}
+		case tagRecombinationHash:
+			node.RecombinationHash = make([]byte, length)
+			copy(node.RecombinationHash, value)
+		case tagRabinSignature:
+			node.RabinSignature = make([]byte, length)
+			copy(node.RabinSignature, value)
+		case tagRabinPubKey:
+			node.RabinPubKey = make([]byte, length)
+			copy(node.RabinPubKey, value)
+		case tagRegistryTxID:
+			node.RegistryTxID = make([]byte, length)
+			copy(node.RegistryTxID, value)
+		case tagRegistryVout:
+			if length == 4 {
+				node.RegistryVout = binary.LittleEndian.Uint32(value)
+			}
+		case tagISOConfig:
+			iso, err := deserializeISOConfig(value)
+			if err != nil {
+				return fmt.Errorf("invalid ISO config: %w", err)
+			}
+			node.ISO = iso
+		case tagACLRef:
+			node.ACLRef = make([]byte, length)
+			copy(node.ACLRef, value)
 
 		// Anchor node fields
 		case tagTreeRootPNode:
