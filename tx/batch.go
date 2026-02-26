@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -139,10 +140,20 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		feeRate = DefaultFeeRate
 	}
 
-	// Count inputs and outputs for fee estimation.
+	// Dedup: track unique (TxID, Vout) pairs for node inputs.
+	type utxoKey struct {
+		txid string
+		vout uint32
+	}
+	seenInputs := make(map[utxoKey]bool)
 	numNodeInputs := 0
 	for _, op := range b.ops {
-		if op.InputUTXO != nil {
+		if op.InputUTXO == nil {
+			continue
+		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if !seenInputs[key] {
+			seenInputs[key] = true
 			numNodeInputs++
 		}
 	}
@@ -167,10 +178,16 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 	baseEstimate := EstimateTxSize(numInputs, numOutputs, totalPayloadSize)
 	estFee := EstimateFee(baseEstimate, feeRate)
 
-	// Calculate total available funds.
+	// Calculate total available funds (deduped node inputs + fee inputs).
 	totalAvailable := uint64(0)
+	seenFunds := make(map[utxoKey]bool)
 	for _, op := range b.ops {
-		if op.InputUTXO != nil {
+		if op.InputUTXO == nil {
+			continue
+		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if !seenFunds[key] {
+			seenFunds[key] = true
 			totalAvailable += op.InputUTXO.Amount
 		}
 	}
@@ -192,11 +209,17 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 
 	// --- Add inputs ---
 
-	// First: node UTXO inputs (ops with existing UTXOs).
+	// First: deduped node UTXO inputs (ops with existing UTXOs).
+	addedInputs := make(map[utxoKey]bool)
 	for _, op := range b.ops {
 		if op.InputUTXO == nil {
 			continue
 		}
+		key := utxoKey{hex.EncodeToString(op.InputUTXO.TxID), op.InputUTXO.Vout}
+		if addedInputs[key] {
+			continue // skip duplicate
+		}
+		addedInputs[key] = true
 		utxoHash, err := chainhash.NewHash(op.InputUTXO.TxID)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid UTXO TxID: %w", ErrScriptBuild, err)

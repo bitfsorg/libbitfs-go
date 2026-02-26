@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -302,4 +303,54 @@ func TestMutationBatch_OpDelete_NoRefresh(t *testing.T) {
 	assert.Equal(t, uint32(0), result.NodeOps[0].OpReturnVout)
 	// DELETE: NodeUTXO should be nil (no P2PKH refresh produced).
 	assert.Nil(t, result.NodeOps[0].NodeUTXO)
+}
+
+func TestMutationBatch_ParentDedup(t *testing.T) {
+	// mkdir scenario: OpCreate(child) spends parent UTXO + OpUpdate(parent) refreshes it.
+	// The parent UTXO should appear as ONE input, not two.
+	_, childPub := generateTestKeyPair(t)
+	parentPriv, parentPub := generateTestKeyPair(t)
+	parentTxID := bytes.Repeat([]byte{0xbb}, 32)
+
+	parentUTXO := &UTXO{
+		TxID: bytes.Repeat([]byte{0x01}, 32), Vout: 1, Amount: 1,
+	}
+
+	batch := NewMutationBatch()
+
+	// OpCreate for child — spends parent's UTXO as Metanet edge.
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpCreate,
+		PubKey:     childPub,
+		ParentTxID: parentTxID,
+		Payload:    []byte("child-payload"),
+		InputUTXO:  parentUTXO,
+		PrivateKey: parentPriv,
+	})
+
+	// OpUpdate for parent — refreshes the same parent UTXO.
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpUpdate,
+		PubKey:     parentPub,
+		ParentTxID: bytes.Repeat([]byte{0x00}, 32),
+		Payload:    []byte("parent-updated-children"),
+		InputUTXO:  parentUTXO, // same UTXO — should be deduped
+		PrivateKey: parentPriv,
+	})
+
+	batch.AddFeeInput(testFeeUTXO(t, 5000))
+	result, err := batch.Build()
+	require.NoError(t, err)
+
+	// Parse the raw tx to count inputs.
+	sdkTx, err := transaction.NewTransactionFromBytes(result.RawTx)
+	require.NoError(t, err)
+
+	// Should have 2 inputs (1 deduped parent + 1 fee), not 3.
+	assert.Len(t, sdkTx.Inputs, 2, "parent UTXO should be deduped to one input")
+
+	// Both ops should still produce their outputs.
+	assert.Len(t, result.NodeOps, 2)
+	assert.NotNil(t, result.NodeOps[0].NodeUTXO) // child P2PKH
+	assert.NotNil(t, result.NodeOps[1].NodeUTXO) // parent refresh P2PKH
 }
