@@ -29,10 +29,47 @@ func NewWalletState() *WalletState {
 	}
 }
 
+// Validate checks the integrity of a deserialized WalletState.
+func (ws *WalletState) Validate() error {
+	seen := make(map[uint32]string)
+	var maxIdx uint32
+
+	for _, v := range ws.Vaults {
+		if v.Deleted {
+			continue
+		}
+		// Check account index within BIP32 range.
+		if v.AccountIndex >= Hardened-DefaultVaultAccount {
+			return fmt.Errorf("vault %q: account index %d exceeds BIP32 hardened boundary", v.Name, v.AccountIndex)
+		}
+		// Check for duplicate account indices among active vaults.
+		if prev, ok := seen[v.AccountIndex]; ok {
+			return fmt.Errorf("duplicate account index %d: vaults %q and %q", v.AccountIndex, prev, v.Name)
+		}
+		seen[v.AccountIndex] = v.Name
+
+		if v.AccountIndex >= maxIdx {
+			maxIdx = v.AccountIndex + 1
+		}
+	}
+
+	// NextVaultIndex must be >= max seen index + 1 (to avoid reuse).
+	if len(seen) > 0 && ws.NextVaultIndex < maxIdx {
+		return fmt.Errorf("NextVaultIndex (%d) is less than max account index + 1 (%d)", ws.NextVaultIndex, maxIdx)
+	}
+
+	return nil
+}
+
 // CreateVault creates a new vault with the given name.
 // Allocates the next available account index (0-based vault index,
 // which maps to BIP44 account index = vaultIndex + 1).
 func (w *Wallet) CreateVault(state *WalletState, name string) (*Vault, error) {
+	// Guard: next vault index must stay below Hardened boundary.
+	if state.NextVaultIndex >= Hardened-DefaultVaultAccount {
+		return nil, fmt.Errorf("vault limit reached: account index would exceed BIP32 hardened boundary")
+	}
+
 	// Check for duplicate names
 	for _, v := range state.Vaults {
 		if v.Name == name && !v.Deleted {

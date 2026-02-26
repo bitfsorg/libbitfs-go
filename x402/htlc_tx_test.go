@@ -210,6 +210,73 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 	})
 }
 
+func TestBuildHTLCFundingTx_FeeAccountsForScriptSize(t *testing.T) {
+	priv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerAddr := sellerPriv.PubKey().Hash()
+	sellerPubKey := sellerPriv.PubKey().Compressed()
+	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
+	changeAddr := priv.PubKey().Hash()
+	buyerPKH := priv.PubKey().Hash()
+	p2pkhScript := buildTestP2PKHScript(t, buyerPKH)
+	mockTxID := sha256.Sum256([]byte("fee-test-utxo"))
+
+	result, err := BuildHTLCFundingTx(&HTLCFundingParams{
+		BuyerPrivKey: priv,
+		SellerAddr:   sellerAddr,
+		SellerPubKey: sellerPubKey,
+		CapsuleHash:  capsuleHash,
+		Amount:       50000,
+		Timeout:      144,
+		UTXOs: []*HTLCUTXO{{
+			TxID:         mockTxID[:],
+			Vout:         0,
+			Amount:       100000,
+			ScriptPubKey: p2pkhScript,
+		}},
+		ChangeAddr: changeAddr,
+		FeeRate:    1,
+	})
+	require.NoError(t, err)
+
+	// Parse the tx to check the fee
+	tx, err := transaction.NewTransactionFromBytes(result.RawTx)
+	require.NoError(t, err)
+
+	var totalOut uint64
+	for _, o := range tx.Outputs {
+		totalOut += o.Satoshis
+	}
+	actualFee := uint64(100000) - totalOut
+	actualSize := uint64(len(result.RawTx))
+
+	// Fee should be at least 1 sat/byte for the actual tx size.
+	assert.GreaterOrEqual(t, actualFee, actualSize,
+		"fee must cover actual transaction size at 1 sat/byte")
+}
+
+func TestBuildHTLCFundingTx_RejectsZeroAmount(t *testing.T) {
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	_, err = BuildHTLCFundingTx(&HTLCFundingParams{
+		BuyerPrivKey: buyerPriv,
+		UTXOs:        []*HTLCUTXO{{TxID: make([]byte, 32), Vout: 0, Amount: 10000}},
+		Amount:       0,
+		SellerAddr:   make([]byte, PubKeyHashLen),
+		SellerPubKey: make([]byte, CompressedPubKeyLen),
+		CapsuleHash:  make([]byte, CapsuleHashLen),
+		ChangeAddr:   make([]byte, PubKeyHashLen),
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidParams, "zero amount should be rejected with ErrInvalidParams")
+	assert.Contains(t, err.Error(), "amount")
+}
+
 func TestBuildSellerClaimTx(t *testing.T) {
 	sellerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)

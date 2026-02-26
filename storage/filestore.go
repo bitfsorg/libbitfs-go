@@ -36,6 +36,9 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 // KeyHashToPath converts a key_hash to its filesystem path.
 // Uses first byte as subdirectory for sharding: {base}/{ab}/{abcdef...}
 func KeyHashToPath(baseDir string, keyHash []byte) string {
+	if len(keyHash) == 0 {
+		return ""
+	}
 	hexHash := hex.EncodeToString(keyHash)
 	// First 2 hex chars (1 byte) as shard directory
 	shard := hexHash[:2]
@@ -80,7 +83,12 @@ func (fs *FileStore) Put(keyHash []byte, ciphertext []byte) error {
 	}
 
 	path := fs.filePath(keyHash)
-	if err := os.WriteFile(path, ciphertext, 0600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, ciphertext, 0600); err != nil {
+		return fmt.Errorf("%w: %w", ErrIOFailure, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp) // best-effort cleanup
 		return fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
 

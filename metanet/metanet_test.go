@@ -1317,6 +1317,21 @@ func TestDeserializePayload_Truncated(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDeserializePayload_RejectsHugeTLVLength(t *testing.T) {
+	// Craft a TLV with tag=0x01 (version) and a uvarint-encoded length
+	// that exceeds math.MaxInt when cast to int on 32-bit platforms.
+	buf := []byte{0x01} // tag
+	// Encode length = math.MaxUint64 as uvarint (10 bytes: 0xFF x9 + 0x01)
+	buf = append(buf, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01)
+	// Append a few bytes of "value" (far fewer than claimed length).
+	buf = append(buf, 0x00, 0x00, 0x00, 0x00)
+
+	node := &Node{}
+	err := deserializePayload(buf, node)
+	assert.Error(t, err, "should reject TLV length exceeding buffer")
+	assert.Contains(t, err.Error(), "truncated")
+}
+
 // --- Integration-style test: full workflow ---
 
 func TestFullWorkflow_CreateAndResolve(t *testing.T) {
@@ -1944,6 +1959,21 @@ func TestResolvePath_RootResult(t *testing.T) {
 	assert.Empty(t, result.Path, "root resolution should have empty Path")
 }
 
+func TestResolvePath_RejectsExcessiveDepth(t *testing.T) {
+	store := newMockStore()
+	root := makeRootDir(makePubKey(0x01))
+
+	// Build a path with 257 components -- exceeds MaxPathComponents.
+	components := make([]string, 257)
+	for i := range components {
+		components[i] = "a"
+	}
+
+	_, err := ResolvePath(store, root, components)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "too deep")
+}
+
 // TestValidateChildName_Unicode verifies that Unicode characters (Chinese, emoji)
 // are accepted as valid child names.
 func TestValidateChildName_Unicode(t *testing.T) {
@@ -1968,12 +1998,23 @@ func TestValidateChildName_Unicode(t *testing.T) {
 	}
 }
 
-// TestValidateChildName_LongName verifies that a very long name is accepted
-// (no length limit in current implementation).
-func TestValidateChildName_LongName(t *testing.T) {
-	longName := strings.Repeat("a", 1000)
-	err := validateChildName(longName)
-	assert.NoError(t, err, "long name should be accepted (no length limit in code)")
+// TestValidateChildName_RejectsLongName verifies that names exceeding MaxChildNameLen are rejected.
+func TestValidateChildName_RejectsLongName(t *testing.T) {
+	longName := strings.Repeat("a", 256)
+	dir := makeRootDir(makePubKey(0x01))
+	_, err := AddChild(dir, longName, NodeTypeFile, makePubKey(0x10), false)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidName)
+	assert.Contains(t, err.Error(), "too long")
+}
+
+// TestValidateChildName_Accepts255ByteName verifies that a 255-byte name is accepted.
+func TestValidateChildName_Accepts255ByteName(t *testing.T) {
+	name255 := strings.Repeat("b", 255)
+	dir := makeRootDir(makePubKey(0x01))
+	entry, err := AddChild(dir, name255, NodeTypeFile, makePubKey(0x10), false)
+	assert.NoError(t, err)
+	assert.Equal(t, name255, entry.Name)
 }
 
 // TestSplitPath_WhitespaceOnly verifies that SplitPath with whitespace-only

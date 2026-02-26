@@ -840,6 +840,81 @@ func TestDeriveNodeKey_EmptySlices(t *testing.T) {
 		"empty slices and nil should derive the same key")
 }
 
+// M-NEW-10: BIP32 account index overflow — DeriveNodeKey must reject vault index near Hardened boundary.
+func TestDeriveNodeKey_RejectsOverflowVaultIndex(t *testing.T) {
+	w := newTestWallet(t)
+	// vaultIndex + DefaultVaultAccount (1) would overflow into Hardened range.
+	_, err := w.DeriveNodeKey(Hardened-1, nil, nil)
+	assert.Error(t, err, "vault index that produces account >= Hardened must be rejected")
+	assert.ErrorIs(t, err, ErrFileIndexOutOfRange)
+}
+
+// M-NEW-10: CreateVault must reject when NextVaultIndex is at Hardened boundary.
+func TestCreateVault_RejectsAtHardenedBoundary(t *testing.T) {
+	w := newTestWallet(t)
+	state := NewWalletState()
+	state.NextVaultIndex = Hardened - 1 // Next creation would wrap
+	_, err := w.CreateVault(state, "overflow")
+	assert.Error(t, err, "creating vault at Hardened boundary must fail")
+}
+
+// M-NEW-12: WalletState.Validate checks structural integrity.
+func TestWalletState_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   *WalletState
+		wantErr string
+	}{
+		{
+			name:  "valid empty state",
+			state: NewWalletState(),
+		},
+		{
+			name: "valid state with vault",
+			state: &WalletState{
+				Vaults:         []Vault{{Name: "v0", AccountIndex: 0}},
+				NextVaultIndex: 1,
+			},
+		},
+		{
+			name: "NextVaultIndex too low",
+			state: &WalletState{
+				Vaults:         []Vault{{Name: "v0", AccountIndex: 5}},
+				NextVaultIndex: 3,
+			},
+			wantErr: "NextVaultIndex",
+		},
+		{
+			name: "duplicate account index",
+			state: &WalletState{
+				Vaults:         []Vault{{Name: "a", AccountIndex: 0}, {Name: "b", AccountIndex: 0}},
+				NextVaultIndex: 1,
+			},
+			wantErr: "duplicate",
+		},
+		{
+			name: "account index at Hardened boundary",
+			state: &WalletState{
+				Vaults:         []Vault{{Name: "v0", AccountIndex: Hardened - 1}},
+				NextVaultIndex: Hardened,
+			},
+			wantErr: "exceeds",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.state.Validate()
+			if tt.wantErr != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // Edge case: large vault index for DeriveNodeKey.
 func TestDeriveNodeKey_LargeVaultIndex(t *testing.T) {
 	w := newTestWallet(t)

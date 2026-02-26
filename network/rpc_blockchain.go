@@ -18,6 +18,9 @@ var _ BlockchainService = (*RPCClient)(nil)
 // btcToSat converts a BTC float64 amount (as returned by the RPC node) to satoshis.
 // It uses math.Round to avoid floating-point truncation issues.
 func btcToSat(btc float64) uint64 {
+	if btc <= 0 {
+		return 0
+	}
 	return uint64(math.Round(btc * 1e8))
 }
 

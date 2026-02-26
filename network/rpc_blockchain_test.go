@@ -555,3 +555,17 @@ func TestRPCClientImplementsBlockchainService(t *testing.T) {
 	// Compile-time interface check
 	var _ BlockchainService = (*RPCClient)(nil)
 }
+
+// M-NEW-18: btcToSat must return 0 for negative values.
+func TestBtcToSat_NegativeReturnsZero(t *testing.T) {
+	assert.Equal(t, uint64(0), btcToSat(-0.001))
+	assert.Equal(t, uint64(0), btcToSat(-1.0))
+	assert.Equal(t, uint64(0), btcToSat(-0.00000001))
+}
+
+func TestBtcToSat_NormalValues(t *testing.T) {
+	assert.Equal(t, uint64(100000), btcToSat(0.001))
+	assert.Equal(t, uint64(100000000), btcToSat(1.0))
+	assert.Equal(t, uint64(1), btcToSat(0.00000001))
+	assert.Equal(t, uint64(0), btcToSat(0.0))
+}

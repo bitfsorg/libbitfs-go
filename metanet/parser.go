@@ -333,12 +333,13 @@ func deserializePayload(data []byte, node *Node) error {
 		}
 		offset += n
 
-		if offset+int(length) > len(data) {
+		if length > uint64(len(data)-offset) {
 			return fmt.Errorf("truncated value for tag 0x%02x at offset %d", tag, offset)
 		}
+		intLen := int(length)
 
-		value := data[offset : offset+int(length)]
-		offset += int(length)
+		value := data[offset : offset+intLen]
+		offset += intLen
 
 		switch tag {
 		case tagVersion:

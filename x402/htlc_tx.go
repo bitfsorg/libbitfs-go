@@ -88,7 +88,8 @@ const defaultHTLCFeeRate = uint64(1) // 1 sat/byte
 
 // VerifyHTLCFunding verifies a funding transaction has an output whose locking
 // script matches the expected HTLC script with at least minAmount satoshis.
-// Returns the output index (vout) of the matching HTLC output.
+// Returns the output index (vout) of the first matching HTLC output.
+// If multiple outputs match, the first (lowest index) is returned deterministically.
 func VerifyHTLCFunding(rawTx []byte, expectedScript []byte, minAmount uint64) (uint32, error) {
 	if len(rawTx) == 0 {
 		return 0, fmt.Errorf("%w: empty raw transaction", ErrInvalidTx)
@@ -143,6 +144,9 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 	if len(params.ChangeAddr) != PubKeyHashLen {
 		return nil, fmt.Errorf("%w: change address must be %d bytes", ErrInvalidParams, PubKeyHashLen)
 	}
+	if params.Amount == 0 {
+		return nil, fmt.Errorf("%w: amount must be greater than zero", ErrInvalidParams)
+	}
 
 	htlcAmount := params.Amount
 
@@ -176,8 +180,10 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 		totalInput += utxo.Amount
 	}
 
-	// Estimate fee: ~148 bytes per input + ~40 bytes per output + 10 overhead.
-	estSize := uint64(10 + len(params.UTXOs)*148 + 2*40)
+	// Estimate fee using actual HTLC script size.
+	htlcOutputSize := uint64(8 + 1 + len(htlcScript))       // satoshis + varint + script
+	changeOutputSize := uint64(8 + 1 + 25)                   // P2PKH: 8 + varint + OP_DUP..OP_CHECKSIG
+	estSize := uint64(10+len(params.UTXOs)*148) + htlcOutputSize + changeOutputSize
 	estFee := estSize * feeRate
 
 	totalNeeded := htlcAmount + estFee

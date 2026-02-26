@@ -13,6 +13,9 @@ type ResolveResult struct {
 	Path   []string    // Fully resolved path components
 }
 
+// MaxPathComponents is the maximum number of components allowed in a path resolution.
+const MaxPathComponents = 256
+
 // ResolvePath resolves a filesystem path starting from a root node.
 // Handles directory traversal, soft link following (max depth 10),
 // and "." / ".." navigation. ".." cannot escape above the root.
@@ -30,6 +33,10 @@ func ResolvePath(store NodeStore, root *Node, pathComponents []string) (*Resolve
 			Node: root,
 			Path: []string{},
 		}, nil
+	}
+
+	if len(pathComponents) > MaxPathComponents {
+		return nil, fmt.Errorf("%w: path too deep (%d components, max %d)", ErrInvalidPath, len(pathComponents), MaxPathComponents)
 	}
 
 	// Validate path components

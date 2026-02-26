@@ -152,10 +152,17 @@ func recomputeMerkleRoot(node *Node) {
 	node.MerkleRoot = ComputeDirectoryMerkleRoot(node.Children)
 }
 
+// MaxChildNameLen is the maximum length of a directory entry name in bytes.
+const MaxChildNameLen = 255
+
 // validateChildName checks that a name is valid for a directory entry.
 func validateChildName(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: name is empty", ErrInvalidName)
+	}
+	// Max child name: 255 bytes (fits uint8, well under uint16 serialization limit).
+	if len(name) > MaxChildNameLen {
+		return fmt.Errorf("%w: name too long (%d bytes, max %d)", ErrInvalidName, len(name), MaxChildNameLen)
 	}
 	if strings.Contains(name, "/") {
 		return fmt.Errorf("%w: name contains path separator", ErrInvalidName)

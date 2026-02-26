@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -36,8 +37,15 @@ func CalculatePrice(pricePerKB, fileSize uint64) uint64 {
 	if pricePerKB == 0 || fileSize == 0 {
 		return 0
 	}
-	// Ceiling division: (a + b - 1) / b
+	// Checked multiplication: detect overflow before computing.
+	if pricePerKB > math.MaxUint64/fileSize {
+		return math.MaxUint64
+	}
 	numerator := pricePerKB * fileSize
+	// Checked addition for ceiling: (numerator + 1023) may overflow.
+	if numerator > math.MaxUint64-1023 {
+		return math.MaxUint64
+	}
 	return (numerator + 1023) / 1024
 }
 

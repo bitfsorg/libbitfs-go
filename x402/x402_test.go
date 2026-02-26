@@ -2,6 +2,7 @@ package x402
 
 import (
 	"crypto/sha256"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -868,4 +869,22 @@ func TestCalculatePrice_LargeValues(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestCalculatePrice_OverflowReturnsMax(t *testing.T) {
+	// pricePerKB * fileSize would overflow uint64.
+	// 2^32 * 2^33 = 2^65 > MaxUint64.
+	price := CalculatePrice(1<<32, 1<<33)
+	// On overflow the multiplication wraps — we want either a capped result
+	// or at minimum not a silently wrong small number.
+	assert.Equal(t, uint64(math.MaxUint64), price,
+		"overflow must return MaxUint64, not a wrapped value")
+}
+
+func TestCalculatePrice_LargeButSafe(t *testing.T) {
+	// Max safe: pricePerKB=1_000_000 (1M sat/KB), fileSize=18_000_000_000_000 (18 TB).
+	// Product = 1.8e19 < MaxUint64 (1.8e19).
+	price := CalculatePrice(1_000_000, 18_000_000_000_000)
+	expected := (uint64(1_000_000)*18_000_000_000_000 + 1023) / 1024
+	assert.Equal(t, expected, price)
 }
