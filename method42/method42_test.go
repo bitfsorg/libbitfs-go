@@ -286,7 +286,6 @@ func TestEncrypt_AccessFree(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.Ciphertext)
 	assert.Len(t, result.KeyHash, 32)
-	assert.Len(t, result.AESKey, 32)
 }
 
 func TestEncrypt_AccessPrivate(t *testing.T) {

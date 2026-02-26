@@ -29,10 +29,6 @@ type EncryptResult struct {
 	// KeyHash is SHA256(SHA256(plaintext)), 32 bytes.
 	// Serves as both KDF salt and content commitment.
 	KeyHash []byte
-
-	// AESKey is the derived AES-256 key, 32 bytes.
-	// Caller may discard this after encryption; it can be re-derived.
-	AESKey []byte
 }
 
 // DecryptResult holds the output of a decryption operation.
@@ -89,7 +85,6 @@ func Encrypt(plaintext []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicKe
 	return &EncryptResult{
 		Ciphertext: ciphertext,
 		KeyHash:    keyHash,
-		AESKey:     aesKey,
 	}, nil
 }
 
