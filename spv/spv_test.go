@@ -461,14 +461,30 @@ func TestVerifyMerkleProof_InvalidTxIDLength(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidTxID)
 }
 
-func TestVerifyMerkleProof_EmptyNodes(t *testing.T) {
+func TestVerifyMerkleProof_SingleTxBlock(t *testing.T) {
+	// In a single-tx block, the tx hash IS the merkle root. Proof has zero nodes.
+	txHash := makeHash(0x42)
 	proof := &MerkleProof{
-		TxID:  makeHash(0x01),
+		TxID:  txHash,
+		Index: 0,
+		Nodes: nil, // No sibling nodes in a single-tx block
+	}
+	valid, err := VerifyMerkleProof(proof, txHash)
+	require.NoError(t, err)
+	assert.True(t, valid)
+}
+
+func TestVerifyMerkleProof_SingleTxBlock_Mismatch(t *testing.T) {
+	// Empty proof with wrong expected root should fail.
+	txHash := makeHash(0x42)
+	proof := &MerkleProof{
+		TxID:  txHash,
 		Index: 0,
 		Nodes: nil,
 	}
-	_, err := VerifyMerkleProof(proof, makeHash(0x00))
-	assert.ErrorIs(t, err, ErrEmptyProofNodes)
+	valid, err := VerifyMerkleProof(proof, makeHash(0xFF))
+	assert.ErrorIs(t, err, ErrMerkleProofInvalid)
+	assert.False(t, valid)
 }
 
 func TestVerifyMerkleProof_InvalidExpectedRootLength(t *testing.T) {
