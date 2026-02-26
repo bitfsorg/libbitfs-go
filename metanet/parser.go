@@ -7,8 +7,8 @@ import (
 	"github.com/tongxiaofeng/libbitfs-go/tx"
 )
 
-// Payload field tag constants for the simple binary format.
-// Each field is: tag(1 byte) + length(2 bytes LE) + value(length bytes).
+// Payload field tag constants for the TLV binary format.
+// Each field is: tag(1 byte) + length(unsigned varint / LEB128) + value(length bytes).
 const (
 	tagVersion        = 0x01
 	tagType           = 0x02
@@ -248,30 +248,36 @@ func SerializePayload(node *Node) ([]byte, error) {
 
 // --- TLV serialization helpers ---
 
+// appendUvarint appends x as an unsigned LEB128 varint.
+func appendUvarint(buf []byte, x uint64) []byte {
+	var tmp [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(tmp[:], x)
+	return append(buf, tmp[:n]...)
+}
+
 func appendUint32Field(buf []byte, tag byte, val uint32) []byte {
-	buf = append(buf, tag, 4, 0) // tag + length = 4, little-endian uint16
+	buf = append(buf, tag)
+	buf = appendUvarint(buf, 4)
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, val)
 	return append(buf, b...)
 }
 
 func appendUint64Field(buf []byte, tag byte, val uint64) []byte {
-	buf = append(buf, tag, 8, 0) // tag byte, then length 8 as LE uint16
+	buf = append(buf, tag)
+	buf = appendUvarint(buf, 8)
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, val)
 	return append(buf, b...)
 }
 
 func appendStringField(buf []byte, tag byte, val string) []byte {
-	data := []byte(val)
-	return appendBytesField(buf, tag, data)
+	return appendBytesField(buf, tag, []byte(val))
 }
 
 func appendBytesField(buf []byte, tag byte, data []byte) []byte {
 	buf = append(buf, tag)
-	lenBuf := make([]byte, 2)
-	binary.LittleEndian.PutUint16(lenBuf, uint16(len(data)))
-	buf = append(buf, lenBuf...)
+	buf = appendUvarint(buf, uint64(len(data)))
 	return append(buf, data...)
 }
 
@@ -314,20 +320,25 @@ func serializeChildEntry(entry *ChildEntry) []byte {
 func deserializePayload(data []byte, node *Node) error {
 	offset := 0
 	for offset < len(data) {
-		if offset+3 > len(data) {
+		if offset >= len(data) {
 			return fmt.Errorf("truncated TLV at offset %d", offset)
 		}
 
 		tag := data[offset]
-		length := int(binary.LittleEndian.Uint16(data[offset+1 : offset+3]))
-		offset += 3
+		offset++
 
-		if offset+length > len(data) {
+		length, n := binary.Uvarint(data[offset:])
+		if n <= 0 {
+			return fmt.Errorf("invalid varint length for tag 0x%02x at offset %d", tag, offset)
+		}
+		offset += n
+
+		if offset+int(length) > len(data) {
 			return fmt.Errorf("truncated value for tag 0x%02x at offset %d", tag, offset)
 		}
 
-		value := data[offset : offset+length]
-		offset += length
+		value := data[offset : offset+int(length)]
+		offset += int(length)
 
 		switch tag {
 		case tagVersion:

@@ -1301,9 +1301,9 @@ func TestDeserializePayload_Empty(t *testing.T) {
 }
 
 func TestDeserializePayload_UnknownTag(t *testing.T) {
-	// Build a payload with unknown tag 0xFF
+	// Build a payload with unknown tag 0xFF (varint length)
 	var buf []byte
-	buf = append(buf, 0xFF, 2, 0, 0x01, 0x02) // tag=0xFF, len=2, data=0x01,0x02
+	buf = append(buf, 0xFF, 0x02, 0x01, 0x02) // tag=0xFF, varint len=2, data=0x01,0x02
 	node := &Node{Metadata: make(map[string]string)}
 	err := deserializePayload(buf, node)
 	assert.NoError(t, err, "unknown tags should be skipped")
@@ -1311,7 +1311,7 @@ func TestDeserializePayload_UnknownTag(t *testing.T) {
 
 func TestDeserializePayload_Truncated(t *testing.T) {
 	// Tag present but value truncated
-	buf := []byte{tagVersion, 4, 0, 0x01} // says length 4 but only 1 byte of data
+	buf := []byte{tagVersion, 0x04, 0x01} // says varint length 4 but only 1 byte of data
 	node := &Node{Metadata: make(map[string]string)}
 	err := deserializePayload(buf, node)
 	assert.Error(t, err)
