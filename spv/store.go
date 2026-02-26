@@ -192,6 +192,10 @@ func (s *MemTxStore) PutTxWithPubKey(tx *StoredTx, pNode []byte) error {
 	defer s.mu.Unlock()
 
 	key := hashKey(tx.TxID)
+	if _, exists := s.byTxID[key]; exists {
+		return ErrDuplicateTx
+	}
+
 	s.byTxID[key] = tx
 
 	if len(pNode) > 0 {

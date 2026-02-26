@@ -1277,7 +1277,7 @@ func TestVerifyMerkleProof_InvalidProofNodeLength(t *testing.T) {
 
 // --- Gap 13: PutTxWithPubKey -- overwrite existing (no duplicate error) ---
 
-func TestMemTxStore_PutWithPubKey_OverwriteExisting(t *testing.T) {
+func TestMemTxStore_PutWithPubKey_RejectsDuplicate(t *testing.T) {
 	store := NewMemTxStore()
 	pNode := makeHash(0xAA)
 
@@ -1289,14 +1289,14 @@ func TestMemTxStore_PutWithPubKey_OverwriteExisting(t *testing.T) {
 	err := store.PutTxWithPubKey(tx1, pNode)
 	require.NoError(t, err)
 
-	// Second put with same TxID also succeeds (overwrites, no ErrDuplicateTx)
+	// Second put with same TxID returns ErrDuplicateTx
 	err = store.PutTxWithPubKey(tx2, pNode)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrDuplicateTx)
 
-	// GetTx should return the second version
+	// GetTx should return the first version (not overwritten)
 	got, err := store.GetTx(txID)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("version2"), got.RawTx)
+	assert.Equal(t, []byte("version1"), got.RawTx)
 }
 
 // --- Gap 7 (store.go): MemHeaderStore.PutHeader auto-computes hash ---

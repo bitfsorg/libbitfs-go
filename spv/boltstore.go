@@ -237,11 +237,15 @@ func (s *BoltTxStore) PutTxWithPubKey(tx *StoredTx, pNode []byte) error {
 	}
 
 	return s.db.Update(func(btx *bbolt.Tx) error {
+		b := btx.Bucket(bucketTxs)
+		if b.Get(tx.TxID) != nil {
+			return ErrDuplicateTx
+		}
 		data, err := encodeGob(tx)
 		if err != nil {
 			return fmt.Errorf("encode tx: %w", err)
 		}
-		if err := btx.Bucket(bucketTxs).Put(tx.TxID, data); err != nil {
+		if err := b.Put(tx.TxID, data); err != nil {
 			return err
 		}
 		if len(pNode) > 0 {
