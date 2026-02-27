@@ -9,6 +9,7 @@
 package method42
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -23,8 +24,14 @@ const (
 	// HKDFBuyerMaskInfo is the info string for buyer mask derivation in paid content flow.
 	HKDFBuyerMaskInfo = "bitfs-buyer-mask"
 
+	// HKDFMetadataInfo is the info string for PRIVATE mode metadata encryption.
+	HKDFMetadataInfo = "bitfs-metadata-encryption"
+
 	// AESKeyLen is the length of the derived AES-256 key in bytes.
 	AESKeyLen = 32
+
+	// MetadataSaltLen is the length of the random salt for metadata key derivation.
+	MetadataSaltLen = 16
 )
 
 // ComputeKeyHash computes the double-SHA256 content commitment.
@@ -79,22 +86,55 @@ func DeriveAESKey(sharedSecretX []byte, keyHash []byte) ([]byte, error) {
 	return key, nil
 }
 
-// SECURITY NOTE — Future metadata encryption (PRIVATE mode envelope):
+// DeriveMetadataKey derives a 32-byte AES-256 key for PRIVATE mode metadata
+// encryption, using a random 16-byte salt.
 //
-// The design spec (5-TransactionSpec.zh.md §4.3) specifies a third HKDF derivation
-// for PRIVATE mode TLV payload encryption:
+// This addresses architecture review P0 §3.2: the original design used
+// SHA256(P_node) as salt, which is weak because P_node is public (in OP_RETURN).
+// A random salt ensures each encryption produces an independent key, even for
+// the same node.
 //
-//   metadata_key = HKDF(ECDH(D_node, P_node).x, SHA256(P_node), "bitfs-metadata-encryption")
+// Returns (key, salt, error). The salt MUST be stored as a prefix of EncPayload
+// so that the owner can re-derive the same key during decryption:
 //
-// This design uses SHA256(P_node) as salt, which is WEAK because P_node is always
-// public (present in OP_RETURN cleartext). A public salt degrades the HKDF security
-// margin. When implementing DeriveMetadataKey, use one of these alternatives:
+//	EncPayload = salt(16B) || nonce(12B) || AES-GCM(TLV) || tag(16B)
 //
-//   Option A: salt = random 16 bytes, stored as prefix of EncPayload ciphertext
-//   Option B: salt = ECDH(D_node, P_node).y (the y-coordinate, not directly public)
+// Parameters:
+//   - sharedSecretX: ECDH(D_node, P_node).x (32 bytes)
+func DeriveMetadataKey(sharedSecretX []byte) (key []byte, salt []byte, err error) {
+	salt = make([]byte, MetadataSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, nil, fmt.Errorf("%w: random salt generation failed: %w", ErrHKDFFailure, err)
+	}
+	key, err = DeriveMetadataKeyWithSalt(sharedSecretX, salt)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, salt, nil
+}
+
+// DeriveMetadataKeyWithSalt derives a 32-byte AES-256 key for PRIVATE mode
+// metadata encryption using a provided salt. Used during decryption when the
+// salt is read from the EncPayload prefix.
 //
-// The design docs must be updated to match whichever option is chosen.
-// See: architecture review §3.2 (2026-02-27).
+// Parameters:
+//   - sharedSecretX: ECDH(D_node, P_node).x (32 bytes)
+//   - salt: random salt (16 bytes, from EncPayload prefix)
+func DeriveMetadataKeyWithSalt(sharedSecretX []byte, salt []byte) ([]byte, error) {
+	if len(sharedSecretX) == 0 {
+		return nil, fmt.Errorf("%w: shared secret is empty", ErrHKDFFailure)
+	}
+	if len(salt) != MetadataSaltLen {
+		return nil, fmt.Errorf("%w: metadata salt must be %d bytes, got %d", ErrHKDFFailure, MetadataSaltLen, len(salt))
+	}
+
+	hkdfReader := hkdf.New(sha256.New, sharedSecretX, salt, []byte(HKDFMetadataInfo))
+	key := make([]byte, AESKeyLen)
+	if _, err := io.ReadFull(hkdfReader, key); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrHKDFFailure, err)
+	}
+	return key, nil
+}
 
 // DeriveBuyerMask derives a 32-byte buyer mask using HKDF-SHA256.
 // Used in the paid content flow: capsule = aes_key XOR buyer_mask.

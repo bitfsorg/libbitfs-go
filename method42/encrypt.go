@@ -19,6 +19,9 @@ const (
 
 	// MinCiphertextLen is the minimum valid ciphertext length (nonce + tag).
 	MinCiphertextLen = NonceLen + GCMTagLen
+
+	// MinEncPayloadLen is the minimum valid EncPayload length (salt + nonce + tag).
+	MinEncPayloadLen = MetadataSaltLen + NonceLen + GCMTagLen
 )
 
 // EncryptResult holds the output of an encryption operation.
@@ -281,6 +284,72 @@ func ReEncrypt(ciphertext []byte, privateKey *ec.PrivateKey, publicKey *ec.Publi
 
 	// Encrypt with new access mode
 	return Encrypt(result.Plaintext, privateKey, publicKey, toAccess)
+}
+
+// EncryptMetadata encrypts a TLV metadata payload for PRIVATE mode.
+//
+// Uses a random 16-byte salt for HKDF key derivation (P0 §3.2 fix).
+// Output format: salt(16B) || nonce(12B) || AES-GCM(tlvPayload) || tag(16B).
+//
+// The caller stores the returned bytes as the node's EncPayload field.
+func EncryptMetadata(tlvPayload []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicKey) ([]byte, error) {
+	if privateKey == nil {
+		return nil, ErrNilPrivateKey
+	}
+	if publicKey == nil {
+		return nil, ErrNilPublicKey
+	}
+
+	sharedX, err := ECDH(privateKey, publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("method42: metadata ECDH failed: %w", err)
+	}
+
+	metaKey, salt, err := DeriveMetadataKey(sharedX)
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext, err := aesGCMEncrypt(tlvPayload, metaKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// EncPayload = salt(16B) || nonce(12B) || ciphertext || tag(16B)
+	encPayload := make([]byte, MetadataSaltLen+len(ciphertext))
+	copy(encPayload, salt)
+	copy(encPayload[MetadataSaltLen:], ciphertext)
+	return encPayload, nil
+}
+
+// DecryptMetadata decrypts a PRIVATE mode EncPayload back to TLV bytes.
+//
+// Input format: salt(16B) || nonce(12B) || AES-GCM(tlvPayload) || tag(16B).
+func DecryptMetadata(encPayload []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicKey) ([]byte, error) {
+	if privateKey == nil {
+		return nil, ErrNilPrivateKey
+	}
+	if publicKey == nil {
+		return nil, ErrNilPublicKey
+	}
+	if len(encPayload) < MinEncPayloadLen {
+		return nil, fmt.Errorf("%w: EncPayload too short (%d bytes, min %d)", ErrInvalidCiphertext, len(encPayload), MinEncPayloadLen)
+	}
+
+	salt := encPayload[:MetadataSaltLen]
+	ciphertext := encPayload[MetadataSaltLen:]
+
+	sharedX, err := ECDH(privateKey, publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("method42: metadata ECDH failed: %w", err)
+	}
+
+	metaKey, err := DeriveMetadataKeyWithSalt(sharedX, salt)
+	if err != nil {
+		return nil, err
+	}
+
+	return aesGCMDecrypt(ciphertext, metaKey)
 }
 
 // aesGCMEncrypt encrypts plaintext with AES-256-GCM.
