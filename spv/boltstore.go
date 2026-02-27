@@ -37,7 +37,7 @@ func OpenBoltStore(dbPath string) (*BoltStore, error) {
 	err = db.Update(func(tx *bbolt.Tx) error {
 		for _, name := range [][]byte{bucketHeaders, bucketHeadersHeight, bucketTxs, bucketTxPubkeys} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
-				return err
+				return fmt.Errorf("boltstore: create bucket %q: %w", name, err)
 			}
 		}
 		return nil
@@ -116,9 +116,12 @@ func (s *BoltHeaderStore) PutHeader(header *BlockHeader) error {
 		}
 
 		if err := hb.Put(header.Hash, data); err != nil {
-			return err
+			return fmt.Errorf("boltstore: put header by hash: %w", err)
 		}
-		return tx.Bucket(bucketHeadersHeight).Put(heightKey(header.Height), header.Hash)
+		if err := tx.Bucket(bucketHeadersHeight).Put(heightKey(header.Height), header.Hash); err != nil {
+			return fmt.Errorf("boltstore: put header by height: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -134,7 +137,10 @@ func (s *BoltHeaderStore) GetHeader(blockHash []byte) (*BlockHeader, error) {
 		if data == nil {
 			return ErrHeaderNotFound
 		}
-		return decodeGob(data, &header)
+		if err := decodeGob(data, &header); err != nil {
+			return fmt.Errorf("boltstore: decode header: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -154,7 +160,10 @@ func (s *BoltHeaderStore) GetHeaderByHeight(height uint32) (*BlockHeader, error)
 		if data == nil {
 			return ErrHeaderNotFound
 		}
-		return decodeGob(data, &header)
+		if err := decodeGob(data, &header); err != nil {
+			return fmt.Errorf("boltstore: decode header by height: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -175,7 +184,10 @@ func (s *BoltHeaderStore) GetTip() (*BlockHeader, error) {
 		if data == nil {
 			return ErrHeaderNotFound
 		}
-		return decodeGob(data, &header)
+		if err := decodeGob(data, &header); err != nil {
+			return fmt.Errorf("boltstore: decode tip header: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -223,7 +235,10 @@ func (s *BoltTxStore) PutTx(tx *StoredTx) error {
 		if err != nil {
 			return fmt.Errorf("encode tx: %w", err)
 		}
-		return b.Put(tx.TxID, data)
+		if err := b.Put(tx.TxID, data); err != nil {
+			return fmt.Errorf("boltstore: put tx: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -246,7 +261,7 @@ func (s *BoltTxStore) PutTxWithPubKey(tx *StoredTx, pNode []byte) error {
 			return fmt.Errorf("encode tx: %w", err)
 		}
 		if err := b.Put(tx.TxID, data); err != nil {
-			return err
+			return fmt.Errorf("boltstore: put tx: %w", err)
 		}
 		if len(pNode) > 0 {
 			// Composite key: pNode + txID for prefix scanning.
@@ -254,7 +269,7 @@ func (s *BoltTxStore) PutTxWithPubKey(tx *StoredTx, pNode []byte) error {
 			copy(compositeKey, pNode)
 			copy(compositeKey[len(pNode):], tx.TxID)
 			if err := btx.Bucket(bucketTxPubkeys).Put(compositeKey, []byte{}); err != nil {
-				return err
+				return fmt.Errorf("boltstore: put tx pubkey index: %w", err)
 			}
 		}
 		return nil
@@ -279,7 +294,10 @@ func (s *BoltTxStore) UpdateTx(tx *StoredTx) error {
 		if err != nil {
 			return fmt.Errorf("encode tx: %w", err)
 		}
-		return b.Put(tx.TxID, data)
+		if err := b.Put(tx.TxID, data); err != nil {
+			return fmt.Errorf("boltstore: update tx: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -295,7 +313,10 @@ func (s *BoltTxStore) GetTx(txID []byte) (*StoredTx, error) {
 		if data == nil {
 			return ErrTxNotFound
 		}
-		return decodeGob(data, &tx)
+		if err := decodeGob(data, &tx); err != nil {
+			return fmt.Errorf("boltstore: decode tx: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -323,14 +344,14 @@ func (s *BoltTxStore) GetTxsByPubKey(pNode []byte) ([]*StoredTx, error) {
 			}
 			var tx StoredTx
 			if err := decodeGob(data, &tx); err != nil {
-				return err
+				return fmt.Errorf("boltstore: decode tx by pubkey: %w", err)
 			}
 			txs = append(txs, &tx)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: get txs by pubkey: %w", err)
 	}
 	return txs, nil
 }
@@ -347,7 +368,7 @@ func (s *BoltTxStore) DeleteTx(txID []byte) error {
 			return ErrTxNotFound
 		}
 		if err := txBucket.Delete(txID); err != nil {
-			return err
+			return fmt.Errorf("boltstore: delete tx: %w", err)
 		}
 
 		// Clean up pubkey index entries that reference this txID.
@@ -363,7 +384,7 @@ func (s *BoltTxStore) DeleteTx(txID []byte) error {
 		}
 		for _, k := range toDelete {
 			if err := pkBucket.Delete(k); err != nil {
-				return err
+				return fmt.Errorf("boltstore: delete pubkey index entry: %w", err)
 			}
 		}
 		return nil
@@ -377,14 +398,14 @@ func (s *BoltTxStore) ListTxs() ([]*StoredTx, error) {
 		return btx.Bucket(bucketTxs).ForEach(func(k, v []byte) error {
 			var tx StoredTx
 			if err := decodeGob(v, &tx); err != nil {
-				return err
+				return fmt.Errorf("boltstore: decode tx in list: %w", err)
 			}
 			txs = append(txs, &tx)
 			return nil
 		})
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: list txs: %w", err)
 	}
 	return txs, nil
 }

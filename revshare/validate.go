@@ -25,7 +25,7 @@ func ValidateDistribution(distributions []Distribution, entries []RevShareEntry,
 
 	expected, err := DistributeRevenue(totalPayment, entries, totalShares)
 	if err != nil {
-		return err
+		return fmt.Errorf("validate distribution: %w", err)
 	}
 
 	for i := range distributions {

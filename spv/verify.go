@@ -79,7 +79,7 @@ func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 	// Step 4: Verify the Merkle proof against the header's Merkle root
 	valid, err := VerifyMerkleProof(tx.Proof, header.MerkleRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("verify: merkle proof: %w", err)
 	}
 	if !valid {
 		return ErrMerkleProofInvalid
