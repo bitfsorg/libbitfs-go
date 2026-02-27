@@ -57,7 +57,7 @@ func FreePrivateKey() *ec.PrivateKey {
 	return privKey
 }
 
-// ComputeCapsule computes the XOR-masked capsule for a buyer.
+// ComputeCapsule computes the XOR-masked capsule for a buyer (legacy deterministic version).
 //
 //	capsule = aes_key XOR buyer_mask
 //
@@ -69,8 +69,36 @@ func FreePrivateKey() *ec.PrivateKey {
 // The buyer recovers aes_key by computing buyer_mask from ECDH(D_buyer, P_node)
 // (equivalent by ECDH symmetry) and XORing with the capsule.
 // The capsule is the preimage that the seller reveals to claim HTLC payment.
+//
+// WARNING: This function produces a deterministic capsule for a given
+// (D_node, P_buyer, key_hash) tuple. If the same buyer purchases the same file
+// twice, the capsule is identical, enabling on-chain linkability. For
+// per-purchase unlinkability, use ComputeCapsuleWithNonce instead.
 func ComputeCapsule(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey,
 	buyerPublicKey *ec.PublicKey, keyHash []byte) ([]byte, error) {
+	return ComputeCapsuleWithNonce(nodePrivateKey, nodePublicKey, buyerPublicKey, keyHash, nil)
+}
+
+// ComputeCapsuleWithNonce computes the XOR-masked capsule for a buyer with an
+// optional per-invoice nonce for capsule unlinkability.
+//
+//	capsule = aes_key XOR buyer_mask
+//
+// where:
+//
+//	aes_key    = HKDF(ECDH(D_node, P_node).x, key_hash, "bitfs-file-encryption")
+//	buyer_mask = HKDF(ECDH(D_node, P_buyer).x, key_hash || nonce, "bitfs-buyer-mask")
+//
+// When nonce is non-nil, it is included in the buyer mask derivation salt,
+// making each capsule unique per purchase even for the same (buyer, file) pair.
+// This prevents on-chain capsule linkability.
+//
+// The buyer must receive the nonce (e.g., as part of the invoice metadata) to
+// derive the same buyer_mask for decryption via DecryptWithCapsuleNonce.
+//
+// When nonce is nil, this is equivalent to ComputeCapsule (legacy behavior).
+func ComputeCapsuleWithNonce(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey,
+	buyerPublicKey *ec.PublicKey, keyHash []byte, nonce []byte) ([]byte, error) {
 	// 1. sharedNode = ECDH(D_node, P_node)
 	sharedNode, err := ECDH(nodePrivateKey, nodePublicKey)
 	if err != nil {
@@ -89,8 +117,8 @@ func ComputeCapsule(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey,
 		return nil, fmt.Errorf("method42: capsule ECDH(node,buyer) failed: %w", err)
 	}
 
-	// 4. buyerMask = DeriveBuyerMask(sharedBuyer, keyHash)
-	buyerMask, err := DeriveBuyerMask(sharedBuyer, keyHash)
+	// 4. buyerMask = DeriveBuyerMaskWithNonce(sharedBuyer, keyHash, nonce)
+	buyerMask, err := DeriveBuyerMaskWithNonce(sharedBuyer, keyHash, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("method42: capsule buyer mask derivation failed: %w", err)
 	}
@@ -112,14 +140,18 @@ func xorBytes(a, b []byte) []byte {
 	return out
 }
 
-// ComputeCapsuleHash computes SHA256(capsule) for the HTLC hash lock.
+// ComputeCapsuleHash computes SHA256(fileTxID ‖ capsule) for the HTLC hash lock.
 //
-//	capsule_hash = SHA256(capsule)
+//	capsule_hash = SHA256(file_txid ‖ capsule)
 //
-// The buyer creates an HTLC locked to this hash. The seller reveals
-// the capsule (preimage) to claim the payment, and the buyer can then
-// use the capsule to derive the decryption key.
-func ComputeCapsuleHash(capsule []byte) []byte {
-	h := sha256.Sum256(capsule)
-	return h[:]
+// Binding the capsule hash to the file's transaction ID prevents a malicious
+// seller from reusing a valid capsule across different files. The buyer creates
+// an HTLC locked to this hash. The seller reveals the capsule (preimage) to
+// claim the payment, and the buyer can then use the capsule to derive the
+// decryption key.
+func ComputeCapsuleHash(fileTxID, capsule []byte) []byte {
+	h := sha256.New()
+	h.Write(fileTxID)
+	h.Write(capsule)
+	return h.Sum(nil)
 }

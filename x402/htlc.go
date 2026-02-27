@@ -2,11 +2,11 @@ package x402
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	"github.com/tongxiaofeng/libbitfs-go/method42"
 )
 
 // HTLCParams holds parameters for creating an HTLC transaction.
@@ -16,12 +16,27 @@ type HTLCParams struct {
 	SellerAddr   []byte // Seller's P2PKH address hash (20 bytes)
 	CapsuleHash  []byte // SHA256(capsule), 32 bytes
 	Amount       uint64 // Payment amount in satoshis
-	Timeout      uint32 // Timeout in blocks (default 144 = ~24 hours), used for nLockTime on refund tx
+	Timeout      uint32 // Refund timeout in blocks (default 72 = ~12h), used as nLockTime. Must be in [MinHTLCTimeout, MaxHTLCTimeout].
+	InvoiceID    []byte // Optional invoice ID for replay protection (16 bytes). If nil/empty, script omits the prefix.
 }
 
 const (
-	// DefaultHTLCTimeout is the default HTLC timeout in blocks (~24 hours).
-	DefaultHTLCTimeout = 144
+	// DefaultHTLCTimeout is the default HTLC refund timeout in blocks (~12 hours at
+	// ~10 min/block). This balances security (seller has time to claim) with usability
+	// (buyer's wallet does not need to stay online for an entire day). The buyer must
+	// broadcast the refund transaction before this timeout expires; the seller can
+	// broadcast a competing claim transaction at any point before the timeout.
+	DefaultHTLCTimeout = 72
+
+	// MinHTLCTimeout is the minimum allowed HTLC timeout in blocks (~1 hour).
+	// Setting the timeout too low risks the seller not having enough time to claim,
+	// or the refund becoming broadcastable before the buyer receives the capsule.
+	MinHTLCTimeout = 6
+
+	// MaxHTLCTimeout is the maximum allowed HTLC timeout in blocks (~2 days).
+	// Excessively long timeouts force the buyer's wallet to remain online and keep
+	// funds locked for an unreasonable duration.
+	MaxHTLCTimeout = 288
 
 	// CompressedPubKeyLen is the expected length of a compressed public key.
 	CompressedPubKeyLen = 33
@@ -31,10 +46,16 @@ const (
 
 	// CapsuleHashLen is the expected length of a capsule hash (SHA256).
 	CapsuleHashLen = 32
+
+	// InvoiceIDLen is the expected length of an invoice ID for HTLC replay protection.
+	InvoiceIDLen = 16
 )
 
-// BuildHTLC constructs an HTLC locking script:
+// BuildHTLC constructs an HTLC locking script. When InvoiceID is provided,
+// the script is prefixed with <invoice_id_16> OP_DROP for replay protection,
+// binding the HTLC to a specific invoice:
 //
+//	[<invoice_id_16> OP_DROP]   // optional, present when InvoiceID is non-empty
 //	OP_IF
 //	  // Seller claim: reveal capsule + seller sig (P2PKH-style)
 //	  OP_SHA256 <capsule_hash> OP_EQUALVERIFY
@@ -72,8 +93,30 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 	if params.Timeout == 0 {
 		return nil, fmt.Errorf("%w: timeout must be > 0", ErrHTLCBuildFailed)
 	}
+	if params.Timeout < MinHTLCTimeout {
+		return nil, fmt.Errorf("%w: timeout %d below minimum %d blocks",
+			ErrHTLCBuildFailed, params.Timeout, MinHTLCTimeout)
+	}
+	if params.Timeout > MaxHTLCTimeout {
+		return nil, fmt.Errorf("%w: timeout %d exceeds maximum %d blocks",
+			ErrHTLCBuildFailed, params.Timeout, MaxHTLCTimeout)
+	}
+	if len(params.InvoiceID) > 0 && len(params.InvoiceID) != InvoiceIDLen {
+		return nil, fmt.Errorf("%w: invoice ID must be %d bytes, got %d",
+			ErrHTLCBuildFailed, InvoiceIDLen, len(params.InvoiceID))
+	}
 
 	s := &script.Script{}
+
+	// Optional replay protection prefix: <invoice_id_16> OP_DROP
+	if len(params.InvoiceID) == InvoiceIDLen {
+		if err := s.AppendPushData(params.InvoiceID); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
+		}
+		if err := s.AppendOpcodes(script.OpDROP); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHTLCBuildFailed, err)
+		}
+	}
 
 	// OP_IF
 	if err := s.AppendOpcodes(script.OpIF); err != nil {
@@ -144,8 +187,9 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 //	<sig> <seller_pubkey> <capsule> OP_TRUE
 //
 // Where OP_TRUE selects the IF branch.
-// If expectedCapsuleHash is non-nil, verifies SHA256(preimage) matches before returning.
-func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte) ([]byte, error) {
+// If expectedCapsuleHash is non-nil, verifies SHA256(fileTxID ‖ preimage) matches before returning.
+// fileTxID binds the capsule hash to the file's transaction identity.
+func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID ...[]byte) ([]byte, error) {
 	if len(spendingTx) == 0 {
 		return nil, fmt.Errorf("%w: empty spending transaction", ErrInvalidPreimage)
 	}
@@ -186,8 +230,12 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte) ([]byte, e
 
 		// Verify hash if expected hash provided.
 		if expectedCapsuleHash != nil {
-			h := sha256.Sum256(preimageChunk.Data)
-			if !bytes.Equal(h[:], expectedCapsuleHash) {
+			var ftxid []byte
+			if len(fileTxID) > 0 {
+				ftxid = fileTxID[0]
+			}
+			h := method42.ComputeCapsuleHash(ftxid, preimageChunk.Data)
+			if !bytes.Equal(h, expectedCapsuleHash) {
 				continue // Hash mismatch — try next input.
 			}
 		}
@@ -199,25 +247,57 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte) ([]byte, e
 }
 
 // ExtractCapsuleHashFromHTLC extracts the capsule hash embedded in an HTLC locking script.
-// The HTLC structure is: OP_IF OP_SHA256 <capsule_hash_32> OP_EQUALVERIFY ...
+// Supports both formats:
+//   - Legacy:  OP_IF OP_SHA256 <capsule_hash_32> OP_EQUALVERIFY ...
+//   - With ID: <invoice_id_16> OP_DROP OP_IF OP_SHA256 <capsule_hash_32> OP_EQUALVERIFY ...
 func ExtractCapsuleHashFromHTLC(htlcScript []byte) ([]byte, error) {
 	s := script.NewFromBytes(htlcScript)
 	chunks, err := s.Chunks()
 	if err != nil {
 		return nil, fmt.Errorf("parse HTLC script: %w", err)
 	}
-	// Expected: chunks[0]=OP_IF, chunks[1]=OP_SHA256, chunks[2]=<32-byte push data>
-	if len(chunks) < 3 {
+
+	// Determine the offset: skip optional <invoice_id> OP_DROP prefix.
+	offset := htlcInvoiceIDOffset(chunks)
+
+	if len(chunks) < offset+3 {
 		return nil, fmt.Errorf("HTLC script too short: %d chunks", len(chunks))
 	}
-	if chunks[0].Op != script.OpIF {
-		return nil, fmt.Errorf("expected OP_IF at position 0, got 0x%02x", chunks[0].Op)
+	if chunks[offset].Op != script.OpIF {
+		return nil, fmt.Errorf("expected OP_IF at position %d, got 0x%02x", offset, chunks[offset].Op)
 	}
-	if chunks[1].Op != script.OpSHA256 {
-		return nil, fmt.Errorf("expected OP_SHA256 at position 1, got 0x%02x", chunks[1].Op)
+	if chunks[offset+1].Op != script.OpSHA256 {
+		return nil, fmt.Errorf("expected OP_SHA256 at position %d, got 0x%02x", offset+1, chunks[offset+1].Op)
 	}
-	if len(chunks[2].Data) != CapsuleHashLen {
-		return nil, fmt.Errorf("capsule hash must be %d bytes, got %d", CapsuleHashLen, len(chunks[2].Data))
+	if len(chunks[offset+2].Data) != CapsuleHashLen {
+		return nil, fmt.Errorf("capsule hash must be %d bytes, got %d", CapsuleHashLen, len(chunks[offset+2].Data))
 	}
-	return chunks[2].Data, nil
+	return chunks[offset+2].Data, nil
+}
+
+// ExtractInvoiceIDFromHTLC extracts the invoice ID from an HTLC locking script,
+// if present. Returns nil if the script uses the legacy format without an invoice ID prefix.
+func ExtractInvoiceIDFromHTLC(htlcScript []byte) ([]byte, error) {
+	s := script.NewFromBytes(htlcScript)
+	chunks, err := s.Chunks()
+	if err != nil {
+		return nil, fmt.Errorf("parse HTLC script: %w", err)
+	}
+	if len(chunks) < 2 {
+		return nil, nil // Too short to have prefix; legacy format.
+	}
+	// Check for <16-byte push data> OP_DROP pattern.
+	if len(chunks[0].Data) == InvoiceIDLen && chunks[1].Op == script.OpDROP {
+		return chunks[0].Data, nil
+	}
+	return nil, nil // Legacy format, no invoice ID.
+}
+
+// htlcInvoiceIDOffset returns the chunk offset to skip the optional
+// <invoice_id_16> OP_DROP prefix. Returns 2 if the prefix is present, 0 otherwise.
+func htlcInvoiceIDOffset(chunks []*script.ScriptChunk) int {
+	if len(chunks) >= 2 && len(chunks[0].Data) == InvoiceIDLen && chunks[1].Op == script.OpDROP {
+		return 2
+	}
+	return 0
 }

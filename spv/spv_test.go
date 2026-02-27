@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math/big"
 	"sync"
 	"testing"
 
@@ -1710,6 +1711,411 @@ func TestMemHeaderStore_GetTip_ReturnsImmutableCopy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, originalNonce, tip2.Nonce, "scalar mutation should not affect stored tip")
 	assert.NotEqual(t, byte(0xFF), tip2.MerkleRoot[0], "slice mutation should not affect stored tip")
+}
+
+// =============================================================================
+// Chain work, difficulty validation, and VerifyHeaderChainWithWork tests
+// =============================================================================
+
+// --- CompactToBig tests ---
+
+func TestCompactToBig_MainnetGenesis(t *testing.T) {
+	// 0x1d00ffff: target = 0x00ffff * 2^(8*(0x1d-3))
+	target := CompactToBig(0x1d00ffff)
+	assert.True(t, target.Sign() > 0, "target should be positive")
+
+	// Verify that CompactToBig and CompactToTarget agree.
+	targetBytes := CompactToTarget(0x1d00ffff)
+	targetFromBytes := new(big.Int).SetBytes(targetBytes)
+	assert.Equal(t, 0, target.Cmp(targetFromBytes),
+		"CompactToBig and CompactToTarget should produce equal values")
+}
+
+func TestCompactToBig_Regtest(t *testing.T) {
+	target := CompactToBig(0x207fffff)
+	assert.True(t, target.Sign() > 0, "regtest target should be positive")
+
+	targetBytes := CompactToTarget(0x207fffff)
+	targetFromBytes := new(big.Int).SetBytes(targetBytes)
+	assert.Equal(t, 0, target.Cmp(targetFromBytes))
+}
+
+func TestCompactToBig_ZeroMantissa(t *testing.T) {
+	// 0x1d000000: mantissa=0, target should be 0.
+	target := CompactToBig(0x1d000000)
+	assert.Equal(t, 0, target.Sign(), "zero mantissa should produce zero target")
+}
+
+func TestCompactToBig_NegativeFlag(t *testing.T) {
+	// Bit 23 set means negative — should produce zero.
+	target := CompactToBig(0x1d800000)
+	assert.Equal(t, 0, target.Sign(), "negative flag should produce zero target")
+}
+
+func TestCompactToBig_SmallExponent(t *testing.T) {
+	// Exponent <= 3: right-shift the mantissa.
+	// 0x03123456: exponent=3, mantissa=0x123456
+	target := CompactToBig(0x03123456)
+	expected := big.NewInt(0x123456)
+	assert.Equal(t, 0, target.Cmp(expected))
+}
+
+func TestCompactToBig_ExponentTwo(t *testing.T) {
+	// 0x02008000: exponent=2, mantissa=0x008000
+	// target = 0x008000 >> 8 = 0x0080
+	target := CompactToBig(0x02008000)
+	expected := big.NewInt(0x80)
+	assert.Equal(t, 0, target.Cmp(expected))
+}
+
+// --- WorkForTarget tests ---
+
+func TestWorkForTarget_KnownValues(t *testing.T) {
+	// For the regtest target (very easy), work should be small.
+	regtestWork := WorkForTarget(0x207fffff)
+	assert.True(t, regtestWork.Sign() > 0, "regtest work should be positive")
+
+	// For mainnet genesis target (harder), work should be larger.
+	mainnetWork := WorkForTarget(0x1d00ffff)
+	assert.True(t, mainnetWork.Sign() > 0, "mainnet work should be positive")
+
+	// Mainnet work > regtest work (harder target = more work per block).
+	assert.True(t, mainnetWork.Cmp(regtestWork) > 0,
+		"mainnet genesis work should exceed regtest work")
+}
+
+func TestWorkForTarget_ZeroTarget(t *testing.T) {
+	work := WorkForTarget(0x1d000000) // zero mantissa
+	assert.Equal(t, 0, work.Sign(), "zero target should produce zero work")
+}
+
+func TestWorkForTarget_NegativeTarget(t *testing.T) {
+	work := WorkForTarget(0x1d800000) // negative flag
+	assert.Equal(t, 0, work.Sign(), "negative target should produce zero work")
+}
+
+func TestWorkForTarget_HarderTargetMoreWork(t *testing.T) {
+	// A smaller target (harder difficulty) should produce more work.
+	easyBits := uint32(0x1d00ffff) // mainnet genesis
+	hardBits := uint32(0x1c00ffff) // one exponent byte smaller = 256x harder
+
+	easyWork := WorkForTarget(easyBits)
+	hardWork := WorkForTarget(hardBits)
+
+	assert.True(t, hardWork.Cmp(easyWork) > 0,
+		"harder target (smaller nBits exponent) should produce more work")
+}
+
+// --- CumulativeWork tests ---
+
+func TestCumulativeWork_Empty(t *testing.T) {
+	total := CumulativeWork(nil)
+	assert.Equal(t, 0, total.Sign(), "empty chain should have zero work")
+}
+
+func TestCumulativeWork_SingleHeader(t *testing.T) {
+	h := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	total := CumulativeWork([]*BlockHeader{h})
+
+	expected := WorkForTarget(h.Bits)
+	assert.Equal(t, 0, total.Cmp(expected), "single header work should match WorkForTarget")
+}
+
+func TestCumulativeWork_MultipleHeaders(t *testing.T) {
+	h1 := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	h2 := buildTestHeader(2, h1.Hash, makeHash(0x22))
+	h3 := buildTestHeader(3, h2.Hash, makeHash(0x33))
+
+	total := CumulativeWork([]*BlockHeader{h1, h2, h3})
+
+	// All use the same Bits, so total = 3 * work_per_header.
+	singleWork := WorkForTarget(h1.Bits)
+	expected := new(big.Int).Mul(singleWork, big.NewInt(3))
+	assert.Equal(t, 0, total.Cmp(expected))
+}
+
+func TestCumulativeWork_SkipsNilHeaders(t *testing.T) {
+	h := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	total := CumulativeWork([]*BlockHeader{nil, h, nil})
+
+	expected := WorkForTarget(h.Bits)
+	assert.Equal(t, 0, total.Cmp(expected), "nil headers should be skipped")
+}
+
+// --- ValidateMinDifficulty tests ---
+
+func TestValidateMinDifficulty_RegtestValid(t *testing.T) {
+	h := &BlockHeader{Bits: 0x207fffff}
+	err := ValidateMinDifficulty(h, Regtest)
+	assert.NoError(t, err, "regtest header at regtest min difficulty should be valid")
+}
+
+func TestValidateMinDifficulty_MainnetValid(t *testing.T) {
+	h := &BlockHeader{Bits: 0x1d00ffff}
+	err := ValidateMinDifficulty(h, Mainnet)
+	assert.NoError(t, err, "mainnet genesis difficulty should be valid on mainnet")
+}
+
+func TestValidateMinDifficulty_MainnetHarder(t *testing.T) {
+	// A harder-than-genesis difficulty should be valid (smaller target).
+	h := &BlockHeader{Bits: 0x1c00ffff}
+	err := ValidateMinDifficulty(h, Mainnet)
+	assert.NoError(t, err, "harder than genesis should be valid")
+}
+
+func TestValidateMinDifficulty_RegtestOnMainnetRejects(t *testing.T) {
+	// Regtest difficulty header should be rejected on mainnet.
+	h := &BlockHeader{Bits: 0x207fffff}
+	err := ValidateMinDifficulty(h, Mainnet)
+	assert.ErrorIs(t, err, ErrDifficultyTooLow,
+		"regtest difficulty should be rejected on mainnet")
+}
+
+func TestValidateMinDifficulty_NilHeader(t *testing.T) {
+	err := ValidateMinDifficulty(nil, Mainnet)
+	assert.ErrorIs(t, err, ErrNilParam)
+}
+
+func TestValidateMinDifficulty_TestnetValid(t *testing.T) {
+	h := &BlockHeader{Bits: 0x1d00ffff}
+	err := ValidateMinDifficulty(h, Testnet)
+	assert.NoError(t, err, "testnet genesis difficulty should be valid on testnet")
+}
+
+// --- ValidateDifficultyTransition tests ---
+
+func TestValidateDifficultyTransition_SameDifficulty(t *testing.T) {
+	prev := &BlockHeader{Bits: 0x1d00ffff}
+	curr := &BlockHeader{Bits: 0x1d00ffff}
+	err := ValidateDifficultyTransition(prev, curr)
+	assert.NoError(t, err, "same difficulty should be valid")
+}
+
+func TestValidateDifficultyTransition_SlightChange(t *testing.T) {
+	prev := &BlockHeader{Bits: 0x1d00ffff}
+	curr := &BlockHeader{Bits: 0x1d00fffe} // very slightly harder
+	err := ValidateDifficultyTransition(prev, curr)
+	assert.NoError(t, err, "small difficulty change should be valid")
+}
+
+func TestValidateDifficultyTransition_MaxFactorBoundary(t *testing.T) {
+	// Exactly 4x change: currTarget = prevTarget * 4.
+	// Use a simple target: 0x03100000 (mantissa=0x100000)
+	prev := &BlockHeader{Bits: 0x03100000}
+	// 4x mantissa: 0x100000 * 4 = 0x400000
+	curr := &BlockHeader{Bits: 0x03400000}
+	err := ValidateDifficultyTransition(prev, curr)
+	assert.NoError(t, err, "exactly 4x increase should be valid")
+}
+
+func TestValidateDifficultyTransition_ExceedsMaxIncrease(t *testing.T) {
+	// Regtest -> way beyond 4x easier target
+	prev := &BlockHeader{Bits: 0x03100000}
+	// 5x mantissa: 0x100000 * 5 = 0x500000
+	curr := &BlockHeader{Bits: 0x03500000}
+	err := ValidateDifficultyTransition(prev, curr)
+	assert.ErrorIs(t, err, ErrDifficultyChange,
+		"target increase >4x should be rejected")
+}
+
+func TestValidateDifficultyTransition_ExceedsMaxDecrease(t *testing.T) {
+	// 0x03400000 mantissa is 0x400000. Divide by more than 4: 0x400000/5 = ~0x0CCCCC
+	prev := &BlockHeader{Bits: 0x03400000}
+	curr := &BlockHeader{Bits: 0x030CCCCC}
+	err := ValidateDifficultyTransition(prev, curr)
+	assert.ErrorIs(t, err, ErrDifficultyChange,
+		"target decrease >4x should be rejected")
+}
+
+func TestValidateDifficultyTransition_NilHeaders(t *testing.T) {
+	h := &BlockHeader{Bits: 0x1d00ffff}
+
+	err := ValidateDifficultyTransition(nil, h)
+	assert.ErrorIs(t, err, ErrNilParam)
+
+	err = ValidateDifficultyTransition(h, nil)
+	assert.ErrorIs(t, err, ErrNilParam)
+}
+
+func TestValidateDifficultyTransition_ZeroTarget(t *testing.T) {
+	prev := &BlockHeader{Bits: 0x1d000000} // zero mantissa
+	curr := &BlockHeader{Bits: 0x1d00ffff}
+	err := ValidateDifficultyTransition(prev, curr)
+	assert.NoError(t, err, "zero target should be skipped (degenerate case)")
+}
+
+// --- MinBitsForNetwork tests ---
+
+func TestMinBitsForNetwork(t *testing.T) {
+	assert.Equal(t, MainnetMinBits, MinBitsForNetwork(Mainnet))
+	assert.Equal(t, TestnetMinBits, MinBitsForNetwork(Testnet))
+	assert.Equal(t, RegtestMinBits, MinBitsForNetwork(Regtest))
+}
+
+// --- VerifyHeaderChainWithWork tests ---
+
+func TestVerifyHeaderChainWithWork_Empty(t *testing.T) {
+	result, err := VerifyHeaderChainWithWork(nil, Regtest)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.CumulativeWork.Sign(), "empty chain should have zero work")
+}
+
+func TestVerifyHeaderChainWithWork_SingleHeader(t *testing.T) {
+	h := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+
+	result, err := VerifyHeaderChainWithWork([]*BlockHeader{h}, Regtest)
+	require.NoError(t, err)
+
+	expected := WorkForTarget(h.Bits)
+	assert.Equal(t, 0, result.CumulativeWork.Cmp(expected))
+}
+
+func TestVerifyHeaderChainWithWork_ValidChain(t *testing.T) {
+	h1 := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	h2 := buildTestHeader(2, h1.Hash, makeHash(0x22))
+	h3 := buildTestHeader(3, h2.Hash, makeHash(0x33))
+
+	result, err := VerifyHeaderChainWithWork([]*BlockHeader{h1, h2, h3}, Regtest)
+	require.NoError(t, err)
+
+	singleWork := WorkForTarget(h1.Bits)
+	expected := new(big.Int).Mul(singleWork, big.NewInt(3))
+	assert.Equal(t, 0, result.CumulativeWork.Cmp(expected))
+}
+
+func TestVerifyHeaderChainWithWork_BrokenChain(t *testing.T) {
+	h1 := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	h2 := buildTestHeader(2, makeHash(0xFF), makeHash(0x22)) // wrong prevBlock
+
+	_, err := VerifyHeaderChainWithWork([]*BlockHeader{h1, h2}, Regtest)
+	assert.ErrorIs(t, err, ErrChainBroken)
+}
+
+func TestVerifyHeaderChainWithWork_NilHeader(t *testing.T) {
+	_, err := VerifyHeaderChainWithWork([]*BlockHeader{nil}, Regtest)
+	assert.ErrorIs(t, err, ErrNilParam)
+
+	h1 := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	_, err = VerifyHeaderChainWithWork([]*BlockHeader{h1, nil}, Regtest)
+	assert.ErrorIs(t, err, ErrNilParam)
+}
+
+func TestVerifyHeaderChainWithWork_RejectsRegtestOnMainnet(t *testing.T) {
+	h := buildTestHeader(1, makeHash(0x00), makeHash(0x11)) // uses regtest Bits
+
+	_, err := VerifyHeaderChainWithWork([]*BlockHeader{h}, Mainnet)
+	assert.ErrorIs(t, err, ErrDifficultyTooLow,
+		"regtest header should fail mainnet min difficulty check")
+}
+
+func TestVerifyHeaderChainWithWork_InvalidPrevBlockLength(t *testing.T) {
+	h1 := buildTestHeader(1, makeHash(0x00), makeHash(0x11))
+	h2 := &BlockHeader{
+		Version:    1,
+		PrevBlock:  []byte{0x01, 0x02}, // invalid length
+		MerkleRoot: makeHash(0x22),
+		Timestamp:  1700000001,
+		Bits:       0x207fffff,
+		Nonce:      0,
+		Height:     2,
+	}
+	h2.Hash = ComputeHeaderHash(h2)
+
+	_, err := VerifyHeaderChainWithWork([]*BlockHeader{h1, h2}, Regtest)
+	assert.ErrorIs(t, err, ErrInvalidHeader)
+}
+
+// --- VerifyTransactionWithNetwork tests ---
+
+func TestVerifyTransactionWithNetwork_Valid(t *testing.T) {
+	txHash := makeTxHash(0x42)
+	proof, merkleRoot := buildTestProof(txHash)
+
+	header := buildTestHeader(100, makeHash(0x00), merkleRoot)
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	require.NoError(t, headerStore.PutHeader(header))
+
+	storedTx := &StoredTx{
+		TxID:        txHash,
+		RawTx:       []byte{0x42},
+		Proof:       proof,
+		BlockHeight: 100,
+	}
+
+	// Regtest network — header uses regtest difficulty.
+	err := VerifyTransactionWithNetwork(storedTx, headerStore, Regtest)
+	assert.NoError(t, err)
+}
+
+func TestVerifyTransactionWithNetwork_RejectsLowDifficulty(t *testing.T) {
+	txHash := makeTxHash(0x42)
+	proof, merkleRoot := buildTestProof(txHash)
+
+	header := buildTestHeader(100, makeHash(0x00), merkleRoot)
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	require.NoError(t, headerStore.PutHeader(header))
+
+	storedTx := &StoredTx{
+		TxID:        txHash,
+		RawTx:       []byte{0x42},
+		Proof:       proof,
+		BlockHeight: 100,
+	}
+
+	// Mainnet network — regtest header should fail.
+	err := VerifyTransactionWithNetwork(storedTx, headerStore, Mainnet)
+	assert.ErrorIs(t, err, ErrDifficultyTooLow,
+		"regtest difficulty header should be rejected on mainnet")
+}
+
+func TestVerifyTransactionWithNetwork_NilParams(t *testing.T) {
+	err := VerifyTransactionWithNetwork(nil, NewMemHeaderStore(), Regtest)
+	assert.ErrorIs(t, err, ErrNilParam)
+
+	tx := &StoredTx{TxID: makeHash(0x01)}
+	err = VerifyTransactionWithNetwork(tx, nil, Regtest)
+	assert.ErrorIs(t, err, ErrNilParam)
+}
+
+// --- CompactToBig consistency with CompactToTarget ---
+
+func TestCompactToBig_ConsistencyWithCompactToTarget(t *testing.T) {
+	// Test several nBits values and verify CompactToBig matches CompactToTarget.
+	testBits := []uint32{
+		0x1d00ffff, // mainnet genesis
+		0x207fffff, // regtest
+		0x1c00ffff, // harder than genesis
+		0x1a00ffff, // even harder
+		0x03100000, // small exponent
+	}
+
+	for _, bits := range testBits {
+		bigTarget := CompactToBig(bits)
+		bytesTarget := CompactToTarget(bits)
+		fromBytes := new(big.Int).SetBytes(bytesTarget)
+
+		assert.Equal(t, 0, bigTarget.Cmp(fromBytes),
+			"CompactToBig(0x%08x) should equal CompactToTarget as big.Int", bits)
+	}
+}
+
+// --- WorkForTarget mathematical properties ---
+
+func TestWorkForTarget_InverseRelationship(t *testing.T) {
+	// If target doubles, work should roughly halve.
+	// Use bits: 0x03100000 (mantissa=0x100000)
+	// and bits: 0x03200000 (mantissa=0x200000, i.e., 2x target)
+	work1 := WorkForTarget(0x03100000)
+	work2 := WorkForTarget(0x03200000)
+
+	// work1 should be roughly 2x work2.
+	ratio := new(big.Int).Div(work1, work2)
+	assert.True(t, ratio.Int64() >= 1 && ratio.Int64() <= 2,
+		"doubling target should roughly halve work, ratio=%d", ratio.Int64())
 }
 
 func BenchmarkComputeHeaderHash(b *testing.B) {

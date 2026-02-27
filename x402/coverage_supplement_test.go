@@ -23,7 +23,7 @@ func TestBuildHTLC_ValidScript_Length(t *testing.T) {
 }
 
 func TestBuildHTLC_DifferentTimeouts(t *testing.T) {
-	timeouts := []uint32{1, 144, 1000, 100000, 1 << 24}
+	timeouts := []uint32{MinHTLCTimeout, DefaultHTLCTimeout, 100, 200, MaxHTLCTimeout}
 	for _, timeout := range timeouts {
 		params := makeHTLCParams()
 		params.Timeout = timeout

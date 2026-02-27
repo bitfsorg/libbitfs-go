@@ -2,7 +2,6 @@ package x402
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -11,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	sighash "github.com/bsv-blockchain/go-sdk/transaction/sighash"
 	"github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
+	"github.com/tongxiaofeng/libbitfs-go/method42"
 )
 
 // HTLCUTXO represents an unspent output for HTLC funding.
@@ -28,10 +28,11 @@ type HTLCFundingParams struct {
 	SellerPubKey []byte         // 33-byte compressed public key (for 2-of-2 multisig refund)
 	CapsuleHash  []byte         // 32-byte SHA256(capsule)
 	Amount       uint64         // HTLC output satoshis
-	Timeout      uint32         // Block height for refund (used as nLockTime)
+	Timeout      uint32         // Refund timeout in blocks (0 = DefaultHTLCTimeout). Must be in [MinHTLCTimeout, MaxHTLCTimeout].
 	UTXOs        []*HTLCUTXO    // Buyer's unspent outputs
 	ChangeAddr   []byte         // 20-byte change address hash
 	FeeRate      uint64         // Satoshis per byte (0 = use default)
+	InvoiceID    []byte         // Optional 16-byte invoice ID for replay protection
 }
 
 // HTLCFundingResult holds the result of building an HTLC funding transaction.
@@ -50,6 +51,7 @@ type SellerClaimParams struct {
 	FundingAmount uint64         // HTLC output amount
 	HTLCScript    []byte         // HTLC locking script bytes
 	Capsule       []byte         // Preimage to reveal (32 bytes)
+	FileTxID      []byte         // 32-byte file transaction ID (binds capsule hash to file identity)
 	SellerPrivKey *ec.PrivateKey // Signs the claim
 	OutputAddr    []byte         // 20-byte destination P2PKH hash
 	FeeRate       uint64         // Satoshis per byte (0 = use default)
@@ -63,7 +65,7 @@ type SellerPreSignParams struct {
 	HTLCScript      []byte         // HTLC locking script bytes
 	SellerPrivKey   *ec.PrivateKey // Signs the refund (seller's half of 2-of-2)
 	BuyerOutputAddr []byte         // 20-byte buyer P2PKH destination
-	Timeout         uint32         // nLockTime value for the refund tx
+	Timeout         uint32         // Refund timeout in blocks (0 = DefaultHTLCTimeout). Must be in [MinHTLCTimeout, MaxHTLCTimeout].
 	FeeRate         uint64         // Satoshis per byte (0 = use default)
 }
 
@@ -155,6 +157,14 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 	if timeout == 0 {
 		timeout = DefaultHTLCTimeout
 	}
+	if timeout < MinHTLCTimeout {
+		return nil, fmt.Errorf("%w: timeout %d below minimum %d blocks",
+			ErrInvalidParams, timeout, MinHTLCTimeout)
+	}
+	if timeout > MaxHTLCTimeout {
+		return nil, fmt.Errorf("%w: timeout %d exceeds maximum %d blocks",
+			ErrInvalidParams, timeout, MaxHTLCTimeout)
+	}
 
 	feeRate := params.FeeRate
 	if feeRate == 0 {
@@ -170,6 +180,7 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 		CapsuleHash:  params.CapsuleHash,
 		Amount:       htlcAmount,
 		Timeout:      timeout,
+		InvoiceID:    params.InvoiceID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build HTLC script: %w", err)
@@ -286,8 +297,8 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	if err != nil {
 		return nil, fmt.Errorf("%w: extract capsule hash: %w", ErrInvalidParams, err)
 	}
-	computedHash := sha256.Sum256(params.Capsule)
-	if !bytes.Equal(computedHash[:], capsuleHashFromScript) {
+	computedHash := method42.ComputeCapsuleHash(params.FileTxID, params.Capsule)
+	if !bytes.Equal(computedHash, capsuleHashFromScript) {
 		return nil, fmt.Errorf("%w: capsule hash mismatch", ErrInvalidParams)
 	}
 
@@ -391,8 +402,17 @@ func BuildSellerPreSignedRefund(params *SellerPreSignParams) (*SellerPreSignResu
 	if len(params.BuyerOutputAddr) != PubKeyHashLen {
 		return nil, fmt.Errorf("%w: buyer output address must be %d bytes", ErrInvalidParams, PubKeyHashLen)
 	}
-	if params.Timeout == 0 {
-		return nil, fmt.Errorf("%w: timeout must be > 0 for refund path", ErrInvalidParams)
+	timeout := params.Timeout
+	if timeout == 0 {
+		timeout = DefaultHTLCTimeout
+	}
+	if timeout < MinHTLCTimeout {
+		return nil, fmt.Errorf("%w: timeout %d below minimum %d blocks",
+			ErrInvalidParams, timeout, MinHTLCTimeout)
+	}
+	if timeout > MaxHTLCTimeout {
+		return nil, fmt.Errorf("%w: timeout %d exceeds maximum %d blocks",
+			ErrInvalidParams, timeout, MaxHTLCTimeout)
 	}
 
 	feeRate := params.FeeRate
@@ -418,7 +438,7 @@ func BuildSellerPreSignedRefund(params *SellerPreSignParams) (*SellerPreSignResu
 	}
 
 	tx := transaction.NewTransaction()
-	tx.LockTime = params.Timeout
+	tx.LockTime = timeout
 
 	// Sequence must be < 0xffffffff for nLockTime to be enforced.
 	tx.AddInput(&transaction.TransactionInput{

@@ -387,11 +387,12 @@ func TestDecryptWithCapsule(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify capsule hash works for HTLC
-	capsuleHash := ComputeCapsuleHash(capsule)
+	fileTxID := bytes.Repeat([]byte{0xf1}, 32) // mock file txid
+	capsuleHash := ComputeCapsuleHash(fileTxID, capsule)
 	assert.Len(t, capsuleHash, 32)
 
 	// Buyer verifies the capsule matches the hash
-	recomputedHash := ComputeCapsuleHash(capsule)
+	recomputedHash := ComputeCapsuleHash(fileTxID, capsule)
 	assert.Equal(t, capsuleHash, recomputedHash)
 
 	// Buyer decrypts with capsule using their private key + node's public key.
@@ -498,19 +499,23 @@ func TestEncrypt_InvalidAccess(t *testing.T) {
 // --- CapsuleHash tests ---
 
 func TestComputeCapsuleHash(t *testing.T) {
+	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
 	capsule := bytes.Repeat([]byte{0xab}, 32)
-	hash := ComputeCapsuleHash(capsule)
+	hash := ComputeCapsuleHash(fileTxID, capsule)
 	assert.Len(t, hash, 32)
 
-	// Should be standard SHA256
-	expected := sha256.Sum256(capsule)
-	assert.Equal(t, expected[:], hash)
+	// Should be SHA256(fileTxID ‖ capsule)
+	expected := sha256.New()
+	expected.Write(fileTxID)
+	expected.Write(capsule)
+	assert.Equal(t, expected.Sum(nil), hash)
 }
 
 func TestComputeCapsuleHash_Deterministic(t *testing.T) {
+	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
 	capsule := []byte("test capsule data")
-	hash1 := ComputeCapsuleHash(capsule)
-	hash2 := ComputeCapsuleHash(capsule)
+	hash1 := ComputeCapsuleHash(fileTxID, capsule)
+	hash2 := ComputeCapsuleHash(fileTxID, capsule)
 	assert.Equal(t, hash1, hash2)
 }
 
@@ -552,7 +557,8 @@ func TestFullEncryptionFlow_FreeThenBuy(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Seller provides capsule_hash for HTLC
-	capsuleHash := ComputeCapsuleHash(capsule)
+	fileTxID := bytes.Repeat([]byte{0xf2}, 32) // mock file txid
+	capsuleHash := ComputeCapsuleHash(fileTxID, capsule)
 	assert.Len(t, capsuleHash, 32)
 
 	// 4. After HTLC is resolved, buyer gets capsule
@@ -1041,12 +1047,282 @@ func TestReEncrypt_NonceUniqueness(t *testing.T) {
 }
 
 func TestComputeCapsuleHash_EmptyCapsule(t *testing.T) {
-	hash := ComputeCapsuleHash([]byte{})
-	assert.Len(t, hash, 32, "ComputeCapsuleHash of empty input should return 32-byte hash")
+	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
+	hash := ComputeCapsuleHash(fileTxID, []byte{})
+	assert.Len(t, hash, 32, "ComputeCapsuleHash of empty capsule should return 32-byte hash")
 
-	// Should be standard SHA256 of empty
-	expected := sha256.Sum256([]byte{})
-	assert.Equal(t, expected[:], hash)
+	// Should be SHA256(fileTxID ‖ empty)
+	expected := sha256.New()
+	expected.Write(fileTxID)
+	assert.Equal(t, expected.Sum(nil), hash)
+}
+
+// =============================================================================
+// Capsule nonce (unlinkability) tests
+// =============================================================================
+
+// TestComputeCapsuleWithNonce_NilNonce verifies that nil nonce produces the same
+// capsule as the legacy ComputeCapsule function (backward compatibility).
+func TestComputeCapsuleWithNonce_NilNonce(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	_, buyerPub := generateKeyPair(t)
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+
+	legacy, err := ComputeCapsule(nodePriv, nodePub, buyerPub, keyHash)
+	require.NoError(t, err)
+
+	withNilNonce, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, nil)
+	require.NoError(t, err)
+
+	withEmptyNonce, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, []byte{})
+	require.NoError(t, err)
+
+	assert.Equal(t, legacy, withNilNonce,
+		"nil nonce should produce the same capsule as legacy ComputeCapsule")
+	assert.Equal(t, legacy, withEmptyNonce,
+		"empty nonce should produce the same capsule as legacy ComputeCapsule")
+}
+
+// TestComputeCapsuleWithNonce_DifferentNonces verifies that different nonces
+// produce different capsules for the same (buyer, file) pair. This is the core
+// unlinkability property.
+func TestComputeCapsuleWithNonce_DifferentNonces(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	_, buyerPub := generateKeyPair(t)
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+
+	nonce1 := []byte("invoice-id-0001")
+	nonce2 := []byte("invoice-id-0002")
+
+	capsule1, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, nonce1)
+	require.NoError(t, err)
+
+	capsule2, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, nonce2)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, capsule1, capsule2,
+		"different nonces should produce different capsules for same buyer+file")
+}
+
+// TestComputeCapsuleWithNonce_SameNonceDeterministic verifies that the same
+// nonce always produces the same capsule (deterministic within a purchase).
+func TestComputeCapsuleWithNonce_SameNonceDeterministic(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	_, buyerPub := generateKeyPair(t)
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+	nonce := []byte("invoice-id-1234")
+
+	capsule1, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, nonce)
+	require.NoError(t, err)
+
+	capsule2, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, nonce)
+	require.NoError(t, err)
+
+	assert.Equal(t, capsule1, capsule2,
+		"same nonce should produce the same capsule deterministically")
+}
+
+// TestComputeCapsuleWithNonce_DiffersFromLegacy verifies that a non-empty nonce
+// produces a different capsule from the legacy (nonce-free) version.
+func TestComputeCapsuleWithNonce_DiffersFromLegacy(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	_, buyerPub := generateKeyPair(t)
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+	nonce := []byte("any-nonce-value")
+
+	legacy, err := ComputeCapsule(nodePriv, nodePub, buyerPub, keyHash)
+	require.NoError(t, err)
+
+	withNonce, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, keyHash, nonce)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, legacy, withNonce,
+		"non-empty nonce should produce a different capsule from legacy")
+}
+
+// TestDecryptWithCapsuleNonce_RoundTrip tests the full flow:
+// encrypt -> compute capsule with nonce -> decrypt with capsule nonce.
+func TestDecryptWithCapsuleNonce_RoundTrip(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	buyerPriv, buyerPub := generateKeyPair(t)
+	plaintext := []byte("paid content with per-invoice unlinkability")
+	nonce := []byte("invoice-nonce-42")
+
+	// Owner encrypts content.
+	encResult, err := Encrypt(plaintext, nodePriv, nodePub, AccessPaid)
+	require.NoError(t, err)
+
+	// Seller computes capsule with nonce.
+	capsule, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, encResult.KeyHash, nonce)
+	require.NoError(t, err)
+
+	// Verify capsule hash works for HTLC.
+	fileTxID := bytes.Repeat([]byte{0xf3}, 32)
+	capsuleHash := ComputeCapsuleHash(fileTxID, capsule)
+	assert.Len(t, capsuleHash, 32)
+
+	// Buyer decrypts with capsule and nonce.
+	decResult, err := DecryptWithCapsuleNonce(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, nodePub, nonce)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decResult.Plaintext)
+}
+
+// TestDecryptWithCapsuleNonce_WrongNonceFails verifies that using a different
+// nonce for decryption than was used for capsule generation fails.
+func TestDecryptWithCapsuleNonce_WrongNonceFails(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	buyerPriv, buyerPub := generateKeyPair(t)
+	plaintext := []byte("content for wrong nonce test")
+
+	encResult, err := Encrypt(plaintext, nodePriv, nodePub, AccessPaid)
+	require.NoError(t, err)
+
+	// Seller computes capsule with nonce1.
+	nonce1 := []byte("correct-nonce")
+	capsule, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, encResult.KeyHash, nonce1)
+	require.NoError(t, err)
+
+	// Buyer tries to decrypt with nonce2 (wrong).
+	nonce2 := []byte("wrong-nonce")
+	_, err = DecryptWithCapsuleNonce(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, nodePub, nonce2)
+	assert.Error(t, err, "wrong nonce should fail decryption")
+}
+
+// TestDecryptWithCapsuleNonce_NilNonceLegacyCompat verifies that nil nonce in
+// DecryptWithCapsuleNonce works with capsules from legacy ComputeCapsule.
+func TestDecryptWithCapsuleNonce_NilNonceLegacyCompat(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	buyerPriv, buyerPub := generateKeyPair(t)
+	plaintext := []byte("legacy capsule backward compat test")
+
+	encResult, err := Encrypt(plaintext, nodePriv, nodePub, AccessPaid)
+	require.NoError(t, err)
+
+	// Legacy capsule (no nonce).
+	capsule, err := ComputeCapsule(nodePriv, nodePub, buyerPub, encResult.KeyHash)
+	require.NoError(t, err)
+
+	// Decrypt with nil nonce via the new function.
+	decResult, err := DecryptWithCapsuleNonce(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, nodePub, nil)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decResult.Plaintext)
+
+	// Also verify the legacy function still works.
+	decResult2, err := DecryptWithCapsule(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, nodePub)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decResult2.Plaintext)
+}
+
+// TestDecryptWithCapsuleNonce_NoncedCapsuleFailsWithoutNonce verifies that a
+// capsule generated with a nonce cannot be decrypted without providing the nonce.
+func TestDecryptWithCapsuleNonce_NoncedCapsuleFailsWithoutNonce(t *testing.T) {
+	nodePriv, nodePub := generateKeyPair(t)
+	buyerPriv, buyerPub := generateKeyPair(t)
+	plaintext := []byte("nonced capsule must use nonce to decrypt")
+
+	encResult, err := Encrypt(plaintext, nodePriv, nodePub, AccessPaid)
+	require.NoError(t, err)
+
+	// Capsule with nonce.
+	nonce := []byte("specific-invoice-nonce")
+	capsule, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, encResult.KeyHash, nonce)
+	require.NoError(t, err)
+
+	// Try legacy decrypt (no nonce) - should fail.
+	_, err = DecryptWithCapsule(encResult.Ciphertext, capsule, encResult.KeyHash, buyerPriv, nodePub)
+	assert.Error(t, err, "nonced capsule should not be decryptable without the nonce")
+}
+
+// TestDeriveBuyerMaskWithNonce_NilNonceEqualsLegacy verifies the underlying
+// mask derivation is identical when nonce is nil.
+func TestDeriveBuyerMaskWithNonce_NilNonceEqualsLegacy(t *testing.T) {
+	sharedX := bytes.Repeat([]byte{0xab}, 32)
+	keyHash := bytes.Repeat([]byte{0xcd}, 32)
+
+	legacyMask, err := DeriveBuyerMask(sharedX, keyHash)
+	require.NoError(t, err)
+
+	noncedMask, err := DeriveBuyerMaskWithNonce(sharedX, keyHash, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, legacyMask, noncedMask,
+		"DeriveBuyerMaskWithNonce(nil) should equal DeriveBuyerMask")
+}
+
+// TestDeriveBuyerMaskWithNonce_DifferentNonces verifies different nonces
+// produce different buyer masks.
+func TestDeriveBuyerMaskWithNonce_DifferentNonces(t *testing.T) {
+	sharedX := bytes.Repeat([]byte{0xab}, 32)
+	keyHash := bytes.Repeat([]byte{0xcd}, 32)
+	nonce1 := []byte("nonce-a")
+	nonce2 := []byte("nonce-b")
+
+	mask1, err := DeriveBuyerMaskWithNonce(sharedX, keyHash, nonce1)
+	require.NoError(t, err)
+
+	mask2, err := DeriveBuyerMaskWithNonce(sharedX, keyHash, nonce2)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, mask1, mask2,
+		"different nonces should produce different buyer masks")
+}
+
+// TestDeriveBuyerMaskWithNonce_InvalidInputs verifies error handling.
+func TestDeriveBuyerMaskWithNonce_InvalidInputs(t *testing.T) {
+	keyHash := bytes.Repeat([]byte{0x01}, 32)
+	sharedX := bytes.Repeat([]byte{0x02}, 32)
+
+	_, err := DeriveBuyerMaskWithNonce([]byte{}, keyHash, nil)
+	assert.ErrorIs(t, err, ErrHKDFFailure, "empty shared secret should fail")
+
+	_, err = DeriveBuyerMaskWithNonce(sharedX, []byte{0x01}, nil)
+	assert.ErrorIs(t, err, ErrHKDFFailure, "invalid key hash length should fail")
+}
+
+// TestCapsuleWithNonce_FullPurchaseFlow tests the complete purchase flow with
+// nonce-based unlinkability: encrypt -> invoice -> capsule -> HTLC -> decrypt.
+func TestCapsuleWithNonce_FullPurchaseFlow(t *testing.T) {
+	ownerPriv, ownerPub := generateKeyPair(t)
+	buyerPriv, buyerPub := generateKeyPair(t)
+	plaintext := []byte("Premium article with per-invoice capsule unlinkability.")
+	fileTxID := bytes.Repeat([]byte{0xf4}, 32)
+
+	// 1. Owner encrypts as PAID.
+	encResult, err := Encrypt(plaintext, ownerPriv, ownerPub, AccessPaid)
+	require.NoError(t, err)
+
+	// 2. Same buyer purchases same file twice with different invoice nonces.
+	nonce1 := []byte("invoice-aabbccdd")
+	nonce2 := []byte("invoice-eeff0011")
+
+	capsule1, err := ComputeCapsuleWithNonce(ownerPriv, ownerPub, buyerPub, encResult.KeyHash, nonce1)
+	require.NoError(t, err)
+
+	capsule2, err := ComputeCapsuleWithNonce(ownerPriv, ownerPub, buyerPub, encResult.KeyHash, nonce2)
+	require.NoError(t, err)
+
+	// 3. Capsules are different (unlinkable on-chain).
+	assert.NotEqual(t, capsule1, capsule2,
+		"capsules for same buyer+file with different nonces must differ")
+
+	// 4. Capsule hashes are different (HTLC scripts are unique).
+	hash1 := ComputeCapsuleHash(fileTxID, capsule1)
+	hash2 := ComputeCapsuleHash(fileTxID, capsule2)
+	assert.NotEqual(t, hash1, hash2,
+		"capsule hashes should differ when capsules differ")
+
+	// 5. Both capsules correctly decrypt the content.
+	dec1, err := DecryptWithCapsuleNonce(encResult.Ciphertext, capsule1, encResult.KeyHash, buyerPriv, ownerPub, nonce1)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, dec1.Plaintext)
+
+	dec2, err := DecryptWithCapsuleNonce(encResult.Ciphertext, capsule2, encResult.KeyHash, buyerPriv, ownerPub, nonce2)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, dec2.Plaintext)
+
+	// 6. Cross-nonce decryption fails (capsule1 with nonce2).
+	_, err = DecryptWithCapsuleNonce(encResult.Ciphertext, capsule1, encResult.KeyHash, buyerPriv, ownerPub, nonce2)
+	assert.Error(t, err, "capsule from nonce1 should not decrypt with nonce2")
 }
 
 // =============================================================================

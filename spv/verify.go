@@ -27,6 +27,9 @@ type StoredTx struct {
 //  2. Merkle proof: tx is included in a block (via VerifyMerkleProof)
 //  3. Block header: Merkle root matches the stored block header
 //  4. Chain verification: block header exists in the header store
+//
+// Note: This function does not check minimum network difficulty. Use
+// VerifyTransactionWithNetwork for network-aware difficulty validation.
 func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 	if tx == nil {
 		return fmt.Errorf("%w: stored transaction", ErrNilParam)
@@ -74,6 +77,78 @@ func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 	// Step 3.5: Verify the header's Proof-of-Work meets stated difficulty.
 	if err := VerifyPoW(header); err != nil {
 		return fmt.Errorf("%w: %w", ErrInsufficientPoW, err)
+	}
+
+	// Step 4: Verify the Merkle proof against the header's Merkle root
+	valid, err := VerifyMerkleProof(tx.Proof, header.MerkleRoot)
+	if err != nil {
+		return fmt.Errorf("verify: merkle proof: %w", err)
+	}
+	if !valid {
+		return ErrMerkleProofInvalid
+	}
+
+	return nil
+}
+
+// VerifyTransactionWithNetwork performs the full SPV verification chain with
+// network-aware minimum difficulty validation:
+//  1. Transaction integrity: TxID is valid (32 bytes, non-zero)
+//  2. Merkle proof: tx is included in a block (via VerifyMerkleProof)
+//  3. Block header: PoW meets stated difficulty AND minimum network difficulty
+//  4. Merkle root verification: proof matches the header's Merkle root
+func VerifyTransactionWithNetwork(tx *StoredTx, headers HeaderStore, net Network) error {
+	if tx == nil {
+		return fmt.Errorf("%w: stored transaction", ErrNilParam)
+	}
+	if headers == nil {
+		return fmt.Errorf("%w: header store", ErrNilParam)
+	}
+
+	// Step 1: Transaction integrity - TxID must be valid
+	if len(tx.TxID) != HashSize {
+		return fmt.Errorf("%w: TxID must be %d bytes", ErrInvalidTxID, HashSize)
+	}
+
+	// Verify RawTx integrity: DoubleSHA256(RawTx) must match TxID.
+	if len(tx.RawTx) > 0 {
+		computed := DoubleHash(tx.RawTx)
+		if !bytes.Equal(computed, tx.TxID) {
+			return fmt.Errorf("%w: RawTx hash does not match TxID", ErrInvalidTxID)
+		}
+	}
+
+	// Step 2: Must have a Merkle proof (confirmed transaction)
+	if tx.Proof == nil {
+		return ErrUnconfirmed
+	}
+
+	// Verify proof TxID matches stored TxID
+	if !bytes.Equal(tx.TxID, tx.Proof.TxID) {
+		return fmt.Errorf("%w: stored TxID does not match proof TxID", ErrMerkleProofInvalid)
+	}
+
+	// Step 3: Look up the block header
+	if len(tx.Proof.BlockHash) != HashSize {
+		return fmt.Errorf("%w: proof block hash must be %d bytes", ErrInvalidHeader, HashSize)
+	}
+
+	header, err := headers.GetHeader(tx.Proof.BlockHash)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrHeaderNotFound, err)
+	}
+	if header == nil {
+		return ErrHeaderNotFound
+	}
+
+	// Step 3.5: Verify the header's Proof-of-Work meets stated difficulty.
+	if err := VerifyPoW(header); err != nil {
+		return fmt.Errorf("%w: %w", ErrInsufficientPoW, err)
+	}
+
+	// Step 3.6: Verify the header meets the minimum network difficulty.
+	if err := ValidateMinDifficulty(header, net); err != nil {
+		return err
 	}
 
 	// Step 4: Verify the Merkle proof against the header's Merkle root

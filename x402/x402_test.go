@@ -279,7 +279,7 @@ func validHTLCParams() *HTLCParams {
 		SellerAddr:   sellerAddr,
 		CapsuleHash:  capsuleHash[:],
 		Amount:       1000,
-		Timeout:      144,
+		Timeout:      DefaultHTLCTimeout,
 	}
 }
 

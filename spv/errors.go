@@ -35,4 +35,10 @@ var (
 
 	// ErrInsufficientPoW indicates the header hash does not meet the target difficulty.
 	ErrInsufficientPoW = errors.New("spv: insufficient proof of work")
+
+	// ErrDifficultyTooLow indicates the header's nBits target is below the network minimum.
+	ErrDifficultyTooLow = errors.New("spv: difficulty below network minimum")
+
+	// ErrDifficultyChange indicates the header's nBits changed too much from the previous header.
+	ErrDifficultyChange = errors.New("spv: difficulty change exceeds allowed bounds")
 )
