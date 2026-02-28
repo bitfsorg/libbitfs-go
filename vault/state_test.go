@@ -280,3 +280,102 @@ func TestReleaseUTXO_MatchesTxIDAndVout(t *testing.T) {
 	assert.False(t, s.UTXOs[1].Spent, "vout=1 should be unspent after release")
 	s.mu.Unlock()
 }
+
+// --- PublishBinding tests ---
+
+func TestGetPublishBinding_Found(t *testing.T) {
+	s := NewLocalState("")
+	s.SetPublishBinding(&PublishBinding{Domain: "example.com", VaultIndex: 0, PubKeyHex: "aabb"})
+	s.SetPublishBinding(&PublishBinding{Domain: "test.org", VaultIndex: 1, PubKeyHex: "ccdd"})
+
+	b := s.GetPublishBinding("example.com")
+	require.NotNil(t, b)
+	assert.Equal(t, "aabb", b.PubKeyHex)
+}
+
+func TestGetPublishBinding_NotFound(t *testing.T) {
+	s := NewLocalState("")
+	s.SetPublishBinding(&PublishBinding{Domain: "example.com", VaultIndex: 0, PubKeyHex: "aabb"})
+
+	b := s.GetPublishBinding("other.com")
+	assert.Nil(t, b)
+}
+
+func TestGetPublishBinding_Empty(t *testing.T) {
+	s := NewLocalState("")
+	assert.Nil(t, s.GetPublishBinding("anything"))
+}
+
+func TestSetPublishBinding_Updates(t *testing.T) {
+	s := NewLocalState("")
+	s.SetPublishBinding(&PublishBinding{Domain: "example.com", VaultIndex: 0, PubKeyHex: "old"})
+	s.SetPublishBinding(&PublishBinding{Domain: "example.com", VaultIndex: 0, PubKeyHex: "new"})
+
+	b := s.GetPublishBinding("example.com")
+	require.NotNil(t, b)
+	assert.Equal(t, "new", b.PubKeyHex)
+	assert.Len(t, s.ListPublishBindings(), 1, "should not duplicate on update")
+}
+
+func TestRemovePublishBinding(t *testing.T) {
+	s := NewLocalState("")
+	s.SetPublishBinding(&PublishBinding{Domain: "example.com", VaultIndex: 0})
+	s.SetPublishBinding(&PublishBinding{Domain: "other.com", VaultIndex: 1})
+
+	removed := s.RemovePublishBinding("example.com")
+	assert.True(t, removed)
+	assert.Nil(t, s.GetPublishBinding("example.com"))
+	assert.NotNil(t, s.GetPublishBinding("other.com"))
+
+	removed = s.RemovePublishBinding("nonexistent")
+	assert.False(t, removed)
+}
+
+func TestListPublishBindings_DeepCopy(t *testing.T) {
+	s := NewLocalState("")
+	s.SetPublishBinding(&PublishBinding{Domain: "a.com", VaultIndex: 0})
+	s.SetPublishBinding(&PublishBinding{Domain: "b.com", VaultIndex: 1})
+
+	bindings := s.ListPublishBindings()
+	assert.Len(t, bindings, 2)
+
+	// Modify the copy — original should not be affected.
+	bindings[0].Domain = "modified"
+	assert.Equal(t, "a.com", s.GetPublishBinding("a.com").Domain)
+}
+
+// --- FindUTXOByPubKey tests ---
+
+func TestFindUTXOByPubKey_Success(t *testing.T) {
+	s := NewLocalState("")
+	s.AddUTXO(&UTXOState{TxID: "t1", PubKeyHex: "pub1", Type: "node", Amount: 546})
+	s.AddUTXO(&UTXOState{TxID: "t2", PubKeyHex: "pub2", Type: "node", Amount: 546})
+
+	u := s.FindUTXOByPubKey("pub1", "node")
+	require.NotNil(t, u)
+	assert.Equal(t, "t1", u.TxID)
+}
+
+func TestFindUTXOByPubKey_SkipsSpent(t *testing.T) {
+	s := NewLocalState("")
+	s.AddUTXO(&UTXOState{TxID: "t1", PubKeyHex: "pub1", Type: "node", Amount: 546, Spent: true})
+	s.AddUTXO(&UTXOState{TxID: "t2", PubKeyHex: "pub1", Type: "node", Amount: 546})
+
+	u := s.FindUTXOByPubKey("pub1", "node")
+	require.NotNil(t, u)
+	assert.Equal(t, "t2", u.TxID)
+}
+
+func TestFindUTXOByPubKey_WrongType(t *testing.T) {
+	s := NewLocalState("")
+	s.AddUTXO(&UTXOState{TxID: "t1", PubKeyHex: "pub1", Type: "fee", Amount: 5000})
+
+	u := s.FindUTXOByPubKey("pub1", "node")
+	assert.Nil(t, u)
+}
+
+func TestFindUTXOByPubKey_NotFound(t *testing.T) {
+	s := NewLocalState("")
+	u := s.FindUTXOByPubKey("pub1", "node")
+	assert.Nil(t, u)
+}

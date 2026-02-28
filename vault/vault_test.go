@@ -331,6 +331,76 @@ func TestSell_NodeNotFound(t *testing.T) {
 	}
 }
 
+func TestSell_Success(t *testing.T) {
+	eng, _ := setupCopyTestEngine(t) // root + /test.txt
+
+	// Add fee UTXOs for sell tx.
+	addFeeUTXO(t, eng, 100000)
+
+	result, err := eng.Sell(&SellOpts{VaultIndex: 0, Path: "/test.txt", PricePerKB: 50})
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.TxHex)
+	assert.NotEmpty(t, result.TxID)
+	assert.Contains(t, result.Message, "50 sats/KB")
+
+	// Verify node state is updated.
+	node := eng.State.FindNodeByPath("/test.txt")
+	require.NotNil(t, node)
+	assert.Equal(t, "paid", node.Access)
+	assert.Equal(t, uint64(50), node.PricePerKB)
+}
+
+func TestSell_NoFeeUTXO(t *testing.T) {
+	eng, _ := setupCopyTestEngine(t) // root + /test.txt
+
+	// Mark all fee UTXOs as spent so Sell can't find one.
+	for _, u := range eng.State.UTXOs {
+		if u.Type == "fee" {
+			u.Spent = true
+		}
+	}
+	require.NoError(t, eng.State.Save())
+
+	_, err := eng.Sell(&SellOpts{VaultIndex: 0, Path: "/test.txt", PricePerKB: 50})
+	require.Error(t, err)
+}
+
+func TestSell_PreservesMetadata(t *testing.T) {
+	eng := initTestEngine(t)
+
+	testFile := filepath.Join(eng.DataDir, "meta.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("metadata file"), 0644))
+
+	// Create root + file with metadata.
+	addFeeUTXO(t, eng, 100000)
+	_, err := eng.Mkdir(&MkdirOpts{VaultIndex: 0, Path: "/"})
+	require.NoError(t, err)
+
+	addFeeUTXO(t, eng, 100000)
+	_, err = eng.PutFile(&PutOpts{
+		VaultIndex:  0,
+		LocalFile:   testFile,
+		RemotePath:  "/meta.txt",
+		Access:      "free",
+		Keywords:    "test,data",
+		Description: "A test file",
+		Domain:      "example.com",
+	})
+	require.NoError(t, err)
+
+	addFeeUTXO(t, eng, 100000)
+	result, err := eng.Sell(&SellOpts{VaultIndex: 0, Path: "/meta.txt", PricePerKB: 100})
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.TxID)
+
+	// Verify metadata is preserved after sell.
+	updatedNode := eng.State.FindNodeByPath("/meta.txt")
+	require.NotNil(t, updatedNode)
+	assert.Equal(t, "test,data", updatedNode.Keywords)
+	assert.Equal(t, "A test file", updatedNode.Description)
+	assert.Equal(t, "example.com", updatedNode.Domain)
+}
+
 func TestPutFile_FileNotExist(t *testing.T) {
 	eng := initTestEngine(t)
 
