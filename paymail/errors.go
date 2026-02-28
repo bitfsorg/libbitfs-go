@@ -23,4 +23,7 @@ var (
 
 	// ErrAddressResolution indicates the P2P payment destination resolution failed.
 	ErrAddressResolution = errors.New("paymail: address resolution failed")
+
+	// ErrDNSSECValidationFailed indicates the DNS response did not pass DNSSEC validation.
+	ErrDNSSECValidationFailed = errors.New("paymail: DNSSEC validation failed")
 )
