@@ -212,7 +212,7 @@ func WorkForTarget(bits uint32) *big.Int {
 		return new(big.Int)
 	}
 
-	// work = 2^256 / (target + 1)
+	// Compute chain work as 2**256 divided by (target + 1).
 	denominator := new(big.Int).Add(target, big.NewInt(1))
 	return new(big.Int).Div(two256, denominator)
 }
@@ -275,7 +275,7 @@ func ValidateDifficultyTransition(prev, curr *BlockHeader) error {
 		return nil
 	}
 
-	// Check: currTarget <= prevTarget * maxFactor
+	// Verify constraint: currTarget <= prevTarget * maxFactor
 	// AND:   currTarget >= prevTarget / maxFactor
 	factor := big.NewInt(maxDifficultyAdjustmentFactor)
 

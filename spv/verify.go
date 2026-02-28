@@ -148,7 +148,7 @@ func VerifyTransactionWithNetwork(tx *StoredTx, headers HeaderStore, net Network
 
 	// Step 3.6: Verify the header meets the minimum network difficulty.
 	if err := ValidateMinDifficulty(header, net); err != nil {
-		return err
+		return fmt.Errorf("verify: min difficulty: %w", err)
 	}
 
 	// Step 4: Verify the Merkle proof against the header's Merkle root

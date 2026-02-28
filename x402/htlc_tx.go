@@ -193,8 +193,8 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 	}
 
 	// Estimate fee using actual HTLC script size.
-	htlcOutputSize := uint64(8 + 1 + len(htlcScript))       // satoshis + varint + script
-	changeOutputSize := uint64(8 + 1 + 25)                   // P2PKH: 8 + varint + OP_DUP..OP_CHECKSIG
+	htlcOutputSize := uint64(8 + 1 + len(htlcScript)) // satoshis + varint + script
+	changeOutputSize := uint64(8 + 1 + 25)            // P2PKH: 8 + varint + OP_DUP..OP_CHECKSIG
 	estSize := uint64(10+len(params.UTXOs)*148) + htlcOutputSize + changeOutputSize
 	estFee := estSize * feeRate
 

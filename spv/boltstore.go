@@ -70,7 +70,7 @@ func heightKey(h uint32) []byte {
 func encodeGob(v interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(v); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: gob encode: %w", err)
 	}
 	return buf.Bytes(), nil
 }
@@ -143,7 +143,7 @@ func (s *BoltHeaderStore) GetHeader(blockHash []byte) (*BlockHeader, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: get header: %w", err)
 	}
 	return &header, nil
 }
@@ -166,7 +166,7 @@ func (s *BoltHeaderStore) GetHeaderByHeight(height uint32) (*BlockHeader, error)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: get header by height: %w", err)
 	}
 	return &header, nil
 }
@@ -190,7 +190,7 @@ func (s *BoltHeaderStore) GetTip() (*BlockHeader, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: get tip: %w", err)
 	}
 	return &header, nil
 }
@@ -202,7 +202,10 @@ func (s *BoltHeaderStore) GetHeaderCount() (uint64, error) {
 		count = uint64(tx.Bucket(bucketHeaders).Stats().KeyN)
 		return nil
 	})
-	return count, err
+	if err != nil {
+		return 0, fmt.Errorf("boltstore: get header count: %w", err)
+	}
+	return count, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +322,7 @@ func (s *BoltTxStore) GetTx(txID []byte) (*StoredTx, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("boltstore: get tx: %w", err)
 	}
 	return &tx, nil
 }

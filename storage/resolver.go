@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,7 +50,7 @@ func (r *ContentResolver) Fetch(keyHash []byte) ([]byte, error) {
 			return data, nil
 		}
 		// Only continue if not found; other errors are real failures.
-		if err != ErrNotFound {
+		if !errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("resolver: local store: %w", err)
 		}
 	}

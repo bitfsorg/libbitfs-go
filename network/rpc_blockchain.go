@@ -351,7 +351,7 @@ func (c *RPCClient) BroadcastTx(ctx context.Context, rawTxHex string) (string, e
 	params := []interface{}{rawTxHex}
 	var txid string
 	if err := c.Call(ctx, "sendrawtransaction", params, &txid); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrBroadcastRejected, err)
+		return "", fmt.Errorf("%w: %w", ErrBroadcastRejected, err)
 	}
 	return txid, nil
 }
@@ -367,7 +367,7 @@ func (c *RPCClient) GetRawTx(ctx context.Context, txid string) ([]byte, error) {
 	}
 	data, err := hex.DecodeString(rawHex)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid tx hex: %v", ErrInvalidResponse, err)
+		return nil, fmt.Errorf("%w: invalid tx hex: %w", ErrInvalidResponse, err)
 	}
 	return data, nil
 }
@@ -404,7 +404,7 @@ func (c *RPCClient) GetBlockHeader(ctx context.Context, blockHash string) ([]byt
 	}
 	data, err := hex.DecodeString(headerHex)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid header hex: %v", ErrInvalidResponse, err)
+		return nil, fmt.Errorf("%w: invalid header hex: %w", ErrInvalidResponse, err)
 	}
 	return data, nil
 }
@@ -421,7 +421,7 @@ func (c *RPCClient) GetMerkleProof(ctx context.Context, txid string) (*MerklePro
 	}
 	data, err := hex.DecodeString(proofHex)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid proof hex: %v", ErrInvalidResponse, err)
+		return nil, fmt.Errorf("%w: invalid proof hex: %w", ErrInvalidResponse, err)
 	}
 	return parseCMerkleBlock(txid, data)
 }
@@ -451,7 +451,7 @@ func (c *RPCClient) GetBestBlockHeight(ctx context.Context) (uint64, error) {
 	// getblockcount returns an integer, but JSON numbers are float64.
 	var height float64
 	if err := json.Unmarshal(raw, &height); err != nil {
-		return 0, fmt.Errorf("%w: invalid block height: %v", ErrInvalidResponse, err)
+		return 0, fmt.Errorf("%w: invalid block height: %w", ErrInvalidResponse, err)
 	}
 	return uint64(height), nil
 }
