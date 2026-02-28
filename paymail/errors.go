@@ -20,4 +20,7 @@ var (
 
 	// ErrInvalidPubKey indicates a public key is not a valid compressed secp256k1 key.
 	ErrInvalidPubKey = errors.New("paymail: invalid compressed public key")
+
+	// ErrAddressResolution indicates the P2P payment destination resolution failed.
+	ErrAddressResolution = errors.New("paymail: address resolution failed")
 )

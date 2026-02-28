@@ -12,9 +12,10 @@ import (
 
 // PaymailCapabilities holds discovered Paymail server capabilities.
 type PaymailCapabilities struct {
-	PKI           string // URL template for public key infrastructure
-	PublicProfile string // URL template for profile info
-	VerifyPubKey  string // URL template for key verification
+	PKI                string // URL template for public key infrastructure
+	PublicProfile      string // URL template for profile info
+	VerifyPubKey       string // URL template for key verification
+	PaymentDestination string // URL template for P2P payment destination (BRFC 2a40af698840)
 }
 
 // PKIResponse holds the response from a Paymail PKI endpoint.
@@ -45,9 +46,10 @@ const MaxPaymailResponseSize = 1 << 20
 
 // Known Paymail capability URNs.
 const (
-	capPKI           = "pki"
-	capPublicProfile = "f12f968c92d6"
-	capVerifyPubKey  = "a9f510c16bde"
+	capPKI                = "pki"
+	capPublicProfile      = "f12f968c92d6"
+	capVerifyPubKey       = "a9f510c16bde"
+	capPaymentDestination = "2a40af698840"
 
 	// Full URN prefixes used by some servers.
 	capPKIFull           = "6745385c3fc0"
@@ -107,6 +109,8 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 			caps.PublicProfile = urlStr
 		case key == capVerifyPubKey || strings.Contains(key, "verify-pubkey"):
 			caps.VerifyPubKey = urlStr
+		case key == capPaymentDestination || strings.Contains(key, "paymentDestination"):
+			caps.PaymentDestination = urlStr
 		}
 	}
 
