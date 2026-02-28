@@ -618,3 +618,197 @@ func TestBtcToSat_NormalValues(t *testing.T) {
 	assert.Equal(t, uint64(1), btcToSat(0.00000001))
 	assert.Equal(t, uint64(0), btcToSat(0.0))
 }
+
+// --- readVarInt tests ---
+
+func TestReadVarInt_OneByte(t *testing.T) {
+	val, n := readVarInt([]byte{0x42})
+	assert.Equal(t, uint64(0x42), val)
+	assert.Equal(t, 1, n)
+}
+
+func TestReadVarInt_ThreeBytes(t *testing.T) {
+	// 0xFD prefix → 2-byte little-endian uint16
+	data := []byte{0xFD, 0x00, 0x01} // 256
+	val, n := readVarInt(data)
+	assert.Equal(t, uint64(256), val)
+	assert.Equal(t, 3, n)
+}
+
+func TestReadVarInt_FiveBytes(t *testing.T) {
+	// 0xFE prefix → 4-byte little-endian uint32
+	data := make([]byte, 5)
+	data[0] = 0xFE
+	binary.LittleEndian.PutUint32(data[1:], 70000)
+	val, n := readVarInt(data)
+	assert.Equal(t, uint64(70000), val)
+	assert.Equal(t, 5, n)
+}
+
+func TestReadVarInt_NineBytes(t *testing.T) {
+	// 0xFF prefix → 8-byte little-endian uint64
+	data := make([]byte, 9)
+	data[0] = 0xFF
+	binary.LittleEndian.PutUint64(data[1:], 0x0100000000)
+	val, n := readVarInt(data)
+	assert.Equal(t, uint64(0x0100000000), val)
+	assert.Equal(t, 9, n)
+}
+
+func TestReadVarInt_Empty(t *testing.T) {
+	val, n := readVarInt(nil)
+	assert.Equal(t, uint64(0), val)
+	assert.Equal(t, 0, n)
+}
+
+func TestReadVarInt_TruncatedThreeByte(t *testing.T) {
+	// 0xFD prefix but only 1 more byte (needs 2)
+	val, n := readVarInt([]byte{0xFD, 0x01})
+	assert.Equal(t, uint64(0), val)
+	assert.Equal(t, 0, n)
+}
+
+func TestReadVarInt_TruncatedFiveByte(t *testing.T) {
+	val, n := readVarInt([]byte{0xFE, 0x01, 0x02})
+	assert.Equal(t, uint64(0), val)
+	assert.Equal(t, 0, n)
+}
+
+func TestReadVarInt_TruncatedNineByte(t *testing.T) {
+	val, n := readVarInt([]byte{0xFF, 0x01, 0x02, 0x03})
+	assert.Equal(t, uint64(0), val)
+	assert.Equal(t, 0, n)
+}
+
+// --- ImportAddress tests ---
+
+func TestImportAddress(t *testing.T) {
+	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
+		"importaddress": func(params []interface{}) (interface{}, *rpcError) {
+			require.Len(t, params, 3)
+			assert.Equal(t, "1TestAddr", params[0])
+			assert.Equal(t, "", params[1])         // empty label
+			assert.Equal(t, true, params[2])        // rescan=true
+			return nil, nil
+		},
+	})
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL})
+	err := client.ImportAddress(context.Background(), "1TestAddr")
+	require.NoError(t, err)
+}
+
+func TestImportAddress_RPCError(t *testing.T) {
+	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
+		"importaddress": func(params []interface{}) (interface{}, *rpcError) {
+			return nil, &rpcError{Code: -4, Message: "wallet error"}
+		},
+	})
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL})
+	err := client.ImportAddress(context.Background(), "1TestAddr")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wallet error")
+}
+
+// --- Hex decoding error tests ---
+
+func TestGetRawTx_InvalidHex(t *testing.T) {
+	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
+		"getrawtransaction": func(params []interface{}) (interface{}, *rpcError) {
+			return "not-valid-hex!", nil
+		},
+	})
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL})
+	_, err := client.GetRawTx(context.Background(), "txid")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+}
+
+func TestGetBlockHeader_InvalidHex(t *testing.T) {
+	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
+		"getblockheader": func(params []interface{}) (interface{}, *rpcError) {
+			return "zzz-bad-hex", nil
+		},
+	})
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL})
+	_, err := client.GetBlockHeader(context.Background(), "hash")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+}
+
+func TestGetMerkleProof_InvalidHex(t *testing.T) {
+	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
+		"gettxoutproof": func(params []interface{}) (interface{}, *rpcError) {
+			return "not-hex!!!", nil
+		},
+	})
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL})
+	_, err := client.GetMerkleProof(context.Background(), "txid")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+}
+
+func TestGetBestBlockHeight_InvalidJSON(t *testing.T) {
+	server := rpcTestServer(t, map[string]func(params []interface{}) (interface{}, *rpcError){
+		"getblockcount": func(params []interface{}) (interface{}, *rpcError) {
+			return "not-a-number", nil
+		},
+	})
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL})
+	_, err := client.GetBestBlockHeight(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+}
+
+// --- parseCMerkleBlock error paths ---
+
+func TestParseCMerkleBlock_InvalidTxidHex(t *testing.T) {
+	_, err := parseCMerkleBlock("not-hex!", make([]byte, 100))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+}
+
+func TestParseCMerkleBlock_ShortTxid(t *testing.T) {
+	_, err := parseCMerkleBlock("abcd", make([]byte, 100))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+	assert.Contains(t, err.Error(), "32 bytes")
+}
+
+// --- ParseBIP37MerkleBlock edge cases ---
+
+func TestParseBIP37MerkleBlock_InvalidHashCountVarInt(t *testing.T) {
+	// Valid header (80 bytes) + totalTxs (4 bytes) = 84, then truncated 0xFD varint
+	data := make([]byte, 86)
+	binary.LittleEndian.PutUint32(data[80:84], 1) // totalTxs = 1
+	data[84] = 0xFD                                // 3-byte varint prefix
+	data[85] = 0x01                                // only 1 extra byte (need 2)
+
+	_, _, _, _, err := ParseBIP37MerkleBlock(data, make([]byte, 32))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hash count varint")
+}
+
+func TestParseBIP37MerkleBlock_HashCountExceedsData(t *testing.T) {
+	// Valid header + totalTxs, claim 1000 hashes but only have a few bytes
+	data := make([]byte, 88)
+	binary.LittleEndian.PutUint32(data[80:84], 1) // totalTxs = 1
+	data[84] = 0xFD                                // 3-byte varint
+	binary.LittleEndian.PutUint16(data[85:87], 1000) // 1000 hashes
+	data[87] = 0x00                                // just padding
+
+	_, _, _, _, err := ParseBIP37MerkleBlock(data, make([]byte, 32))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds available data")
+}
