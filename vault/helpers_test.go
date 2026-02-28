@@ -7,7 +7,7 @@ import (
 	bsvhash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tongxiaofeng/libbitfs-go/metanet"
+	"github.com/bitfsorg/libbitfs-go/metanet"
 )
 
 func TestDetectMimeType(t *testing.T) {

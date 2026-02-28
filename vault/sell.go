@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tongxiaofeng/libbitfs-go/metanet"
-	"github.com/tongxiaofeng/libbitfs-go/tx"
+	"github.com/bitfsorg/libbitfs-go/metanet"
+	"github.com/bitfsorg/libbitfs-go/tx"
 )
 
 // SellOpts holds options for the Sell operation.

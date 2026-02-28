@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/tongxiaofeng/libbitfs-go/spv"
+	"github.com/bitfsorg/libbitfs-go/spv"
 )
 
 // Compile-time interface check.

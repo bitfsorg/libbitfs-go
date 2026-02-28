@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/tongxiaofeng/libbitfs-go/tx"
+	"github.com/bitfsorg/libbitfs-go/tx"
 )
 
 // Payload field tag constants for the TLV binary format.

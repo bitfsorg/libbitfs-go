@@ -8,12 +8,12 @@ import (
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 
-	"github.com/tongxiaofeng/libbitfs-go/config"
-	"github.com/tongxiaofeng/libbitfs-go/network"
-	"github.com/tongxiaofeng/libbitfs-go/spv"
-	"github.com/tongxiaofeng/libbitfs-go/storage"
-	"github.com/tongxiaofeng/libbitfs-go/tx"
-	"github.com/tongxiaofeng/libbitfs-go/wallet"
+	"github.com/bitfsorg/libbitfs-go/config"
+	"github.com/bitfsorg/libbitfs-go/network"
+	"github.com/bitfsorg/libbitfs-go/spv"
+	"github.com/bitfsorg/libbitfs-go/storage"
+	"github.com/bitfsorg/libbitfs-go/tx"
+	"github.com/bitfsorg/libbitfs-go/wallet"
 )
 
 // Vault is the shared business logic layer. CLI commands, shell REPL,

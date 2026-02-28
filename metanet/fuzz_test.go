@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tongxiaofeng/libbitfs-go/tx"
+	"github.com/bitfsorg/libbitfs-go/tx"
 )
 
 // FuzzDeserializePayload ensures the TLV parser never panics on arbitrary input.

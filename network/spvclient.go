@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/tongxiaofeng/libbitfs-go/spv"
+	"github.com/bitfsorg/libbitfs-go/spv"
 )
 
 // VerifyResult holds the result of an SPV verification.

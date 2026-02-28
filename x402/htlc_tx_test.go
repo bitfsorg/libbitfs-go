@@ -10,7 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tongxiaofeng/libbitfs-go/method42"
+	"github.com/bitfsorg/libbitfs-go/method42"
 )
 
 func TestVerifyHTLCFunding(t *testing.T) {

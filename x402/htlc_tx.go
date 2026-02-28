@@ -10,7 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	sighash "github.com/bsv-blockchain/go-sdk/transaction/sighash"
 	"github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
-	"github.com/tongxiaofeng/libbitfs-go/method42"
+	"github.com/bitfsorg/libbitfs-go/method42"
 )
 
 // HTLCUTXO represents an unspent output for HTLC funding.

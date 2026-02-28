@@ -1,4 +1,4 @@
-module github.com/tongxiaofeng/libbitfs-go
+module github.com/bitfsorg/libbitfs-go
 
 go 1.25.6
 

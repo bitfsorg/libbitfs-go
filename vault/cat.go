@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/tongxiaofeng/libbitfs-go/method42"
+	"github.com/bitfsorg/libbitfs-go/method42"
 )
 
 // CatOpts holds options for the Cat (view file) operation.

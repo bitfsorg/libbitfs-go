@@ -3,7 +3,7 @@ package metanet
 import (
 	"fmt"
 
-	"github.com/tongxiaofeng/libbitfs-go/spv"
+	"github.com/bitfsorg/libbitfs-go/spv"
 )
 
 // ComputeChildLeafHash computes the Merkle leaf hash for a single ChildEntry.

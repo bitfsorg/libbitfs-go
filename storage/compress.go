@@ -6,7 +6,7 @@ import (
 	"compress/lzw"
 	"io"
 
-	"github.com/tongxiaofeng/libbitfs-go/metanet"
+	"github.com/bitfsorg/libbitfs-go/metanet"
 )
 
 // Compress compresses data using the specified scheme.

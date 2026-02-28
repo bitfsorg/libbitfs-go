@@ -3,7 +3,7 @@ package vault
 import (
 	"fmt"
 
-	"github.com/tongxiaofeng/libbitfs-go/tx"
+	"github.com/bitfsorg/libbitfs-go/tx"
 )
 
 // buildAndSignBatch builds and signs a MutationBatch transaction.

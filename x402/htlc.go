@@ -6,7 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/tongxiaofeng/libbitfs-go/method42"
+	"github.com/bitfsorg/libbitfs-go/method42"
 )
 
 // HTLCParams holds parameters for creating an HTLC transaction.

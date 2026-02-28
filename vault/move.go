@@ -6,9 +6,9 @@ import (
 	"path"
 	"time"
 
-	"github.com/tongxiaofeng/libbitfs-go/metanet"
-	"github.com/tongxiaofeng/libbitfs-go/method42"
-	"github.com/tongxiaofeng/libbitfs-go/tx"
+	"github.com/bitfsorg/libbitfs-go/metanet"
+	"github.com/bitfsorg/libbitfs-go/method42"
+	"github.com/bitfsorg/libbitfs-go/tx"
 )
 
 // MoveOpts holds options for the Move (rename) operation.
