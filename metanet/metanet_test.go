@@ -1448,14 +1448,8 @@ func TestFollowLink_CircularLinks(t *testing.T) {
 // --- Priority 2: Hard link to directory rejection ---
 // TestAddChild_HardLinkToDirectory verifies that AddChild rejects creating
 // a hard link (non-hardened child entry) targeting a directory node.
-//
-// EXPECTED TO FAIL: The spec (section 4.3) says "only FILE nodes can be
-// hard-linked; directory hard links are forbidden," but AddChild currently
-// does NOT validate this. This test documents the gap — AddChild should
-// return ErrHardLinkToDirectory when the nodeType is NodeTypeDir and the
-// entry would create a hard link (Hardened=false).
-//
-// TODO: Implement hard link validation in AddChild.
+// Validation is implemented in directory.go (AddChild checks for duplicate
+// PubKey on DIR entries and returns ErrHardLinkToDirectory).
 func TestAddChild_HardLinkToDirectory(t *testing.T) {
 	dir := makeRootDir(makePubKey(0x01))
 
