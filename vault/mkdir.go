@@ -17,6 +17,16 @@ type MkdirOpts struct {
 
 // Mkdir creates a directory node at the given path.
 func (v *Vault) Mkdir(opts *MkdirOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.mkdirInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) mkdirInner(opts *MkdirOpts) (*Result, error) {
 	// Ensure root exists.
 	rootNode, rootResult, err := v.EnsureRootExists(opts.VaultIndex)
 	if err != nil {

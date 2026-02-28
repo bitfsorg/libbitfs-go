@@ -18,6 +18,16 @@ type RemoveOpts struct {
 
 // Remove marks a node as deleted via SelfUpdate transaction.
 func (v *Vault) Remove(opts *RemoveOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.removeInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 	// Find the node.
 	nodeState := v.State.FindNodeByPath(opts.Path)
 	if nodeState == nil {

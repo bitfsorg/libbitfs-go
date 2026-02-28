@@ -22,6 +22,16 @@ type MoveOpts struct {
 // Move renames or moves a node. Same-directory renames update a single parent;
 // cross-directory moves update both the source and destination parents.
 func (v *Vault) Move(opts *MoveOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.moveInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) moveInner(opts *MoveOpts) (*Result, error) {
 	srcDir := path.Dir(opts.SrcPath)
 	dstDir := path.Dir(opts.DstPath)
 

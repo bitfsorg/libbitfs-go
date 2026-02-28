@@ -1,6 +1,3 @@
-// Package engine provides the shared business logic layer between CLI commands,
-// the interactive shell, and the daemon. It orchestrates wallet, storage, and
-// transaction building from libbitfs into high-level filesystem operations.
 package vault
 
 import (
@@ -119,6 +116,25 @@ func LoadLocalState(path string) (*LocalState, error) {
 	}
 	state.path = path
 	return &state, nil
+}
+
+// Reload re-reads the state file from disk (used after acquiring write lock).
+// No-op if the state file has not been persisted yet.
+func (s *LocalState) Reload() error {
+	if _, err := os.Stat(s.path); os.IsNotExist(err) {
+		return nil // not yet persisted, keep current in-memory state
+	}
+	fresh, err := LoadLocalState(s.path)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Nodes = fresh.Nodes
+	s.UTXOs = fresh.UTXOs
+	s.RootTxID = fresh.RootTxID
+	s.PublishBindings = fresh.PublishBindings
+	return nil
 }
 
 // Save persists the local state to disk.

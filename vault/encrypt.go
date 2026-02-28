@@ -19,6 +19,16 @@ type EncryptOpts struct {
 
 // EncryptNode re-encrypts content from FREE to PRIVATE access.
 func (v *Vault) EncryptNode(opts *EncryptOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.encryptNodeInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) encryptNodeInner(opts *EncryptOpts) (*Result, error) {
 	nodeState := v.State.FindNodeByPath(opts.Path)
 	if nodeState == nil {
 		return nil, fmt.Errorf("vault: node %q not found", opts.Path)

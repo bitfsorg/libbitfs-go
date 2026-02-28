@@ -103,6 +103,28 @@ func New(dataDir, password string) (*Vault, error) {
 	}, nil
 }
 
+// withWriteLock executes fn while holding an exclusive vault lock.
+// It reloads state before fn and saves state after fn returns nil error.
+func (v *Vault) withWriteLock(fn func() error) error {
+	lockPath := filepath.Join(v.DataDir, "vault.lock")
+	fl, err := acquireLock(lockPath)
+	if err != nil {
+		return fmt.Errorf("vault lock: %w", err)
+	}
+	defer releaseLock(fl)
+
+	// Reload latest state to prevent stale reads.
+	if err := v.State.Reload(); err != nil {
+		return fmt.Errorf("reload state: %w", err)
+	}
+
+	if err := fn(); err != nil {
+		return err
+	}
+
+	return v.State.Save()
+}
+
 // Close persists state and releases resources. Should be called when done.
 func (v *Vault) Close() error {
 	if v.SPVStore != nil {

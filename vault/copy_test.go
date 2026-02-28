@@ -341,6 +341,7 @@ func TestCopy_PreservesExtendedMetadata(t *testing.T) {
 	srcNode.Domain = "example.com"
 	srcNode.OnChain = true
 	srcNode.Compression = 1
+	require.NoError(t, eng.State.Save()) // persist in-memory changes before locked op
 
 	addFeeUTXO(t, eng, 100000)
 

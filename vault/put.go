@@ -27,6 +27,16 @@ type PutOpts struct {
 
 // PutFile uploads a local file to the BitFS filesystem.
 func (v *Vault) PutFile(opts *PutOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.putFileInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) putFileInner(opts *PutOpts) (*Result, error) {
 	// Read local file.
 	plaintext, err := os.ReadFile(opts.LocalFile)
 	if err != nil {

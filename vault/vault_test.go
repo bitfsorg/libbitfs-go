@@ -512,6 +512,7 @@ func TestRemove_ParentUpdateFailure_PreservesState(t *testing.T) {
 			u.Spent = true
 		}
 	}
+	require.NoError(t, eng.State.Save()) // persist sabotaged state before locked op
 
 	// Remove should still succeed (best-effort), but with a warning.
 	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/test.txt"})

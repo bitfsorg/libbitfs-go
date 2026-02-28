@@ -16,8 +16,18 @@ type SellOpts struct {
 	PricePerKB uint64 // price in sats/KB
 }
 
-// Sell sets a price on content via SelfUpdate transaction (access → paid).
+// Sell sets a price on content via SelfUpdate transaction (access -> paid).
 func (v *Vault) Sell(opts *SellOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.sellInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) sellInner(opts *SellOpts) (*Result, error) {
 	nodeState := v.State.FindNodeByPath(opts.Path)
 	if nodeState == nil {
 		return nil, fmt.Errorf("vault: node %q not found", opts.Path)

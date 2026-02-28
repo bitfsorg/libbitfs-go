@@ -19,6 +19,16 @@ type LinkOpts struct {
 
 // Link creates a hard or soft link.
 func (v *Vault) Link(opts *LinkOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.linkInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) linkInner(opts *LinkOpts) (*Result, error) {
 	// Find target node.
 	targetNode := v.State.FindNodeByPath(opts.TargetPath)
 	if targetNode == nil {

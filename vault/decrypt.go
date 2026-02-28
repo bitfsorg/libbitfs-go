@@ -18,6 +18,16 @@ type DecryptOpts struct {
 
 // DecryptNode re-encrypts content from PRIVATE to FREE access.
 func (v *Vault) DecryptNode(opts *DecryptOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.decryptNodeInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) decryptNodeInner(opts *DecryptOpts) (*Result, error) {
 	nodeState := v.State.FindNodeByPath(opts.Path)
 	if nodeState == nil {
 		return nil, fmt.Errorf("vault: node %q not found", opts.Path)

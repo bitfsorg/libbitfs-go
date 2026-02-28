@@ -333,6 +333,7 @@ func TestMove_CrossDirectory_TxBuildFailure_PreservesState(t *testing.T) {
 			u.Spent = true
 		}
 	}
+	require.NoError(t, eng.State.Save()) // persist sabotaged state before locked op
 
 	// Move should fail because dst parent update can't build.
 	_, err := eng.Move(&MoveOpts{

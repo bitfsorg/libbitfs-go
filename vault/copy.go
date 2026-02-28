@@ -21,6 +21,16 @@ type CopyOpts struct {
 // re-encrypted content. Unlike a hard link, the copy has its own identity
 // on the Metanet DAG.
 func (v *Vault) Copy(opts *CopyOpts) (*Result, error) {
+	var result *Result
+	err := v.withWriteLock(func() error {
+		var err error
+		result, err = v.copyInner(opts)
+		return err
+	})
+	return result, err
+}
+
+func (v *Vault) copyInner(opts *CopyOpts) (*Result, error) {
 	// 1. Find source node by path.
 	srcNode := v.State.FindNodeByPath(opts.SrcPath)
 	if srcNode == nil {
