@@ -687,8 +687,8 @@ func TestImportAddress(t *testing.T) {
 		"importaddress": func(params []interface{}) (interface{}, *rpcError) {
 			require.Len(t, params, 3)
 			assert.Equal(t, "1TestAddr", params[0])
-			assert.Equal(t, "", params[1])         // empty label
-			assert.Equal(t, true, params[2])        // rescan=true
+			assert.Equal(t, "", params[1])   // empty label
+			assert.Equal(t, true, params[2]) // rescan=true
 			return nil, nil
 		},
 	})
@@ -792,8 +792,8 @@ func TestParseBIP37MerkleBlock_InvalidHashCountVarInt(t *testing.T) {
 	// Valid header (80 bytes) + totalTxs (4 bytes) = 84, then truncated 0xFD varint
 	data := make([]byte, 86)
 	binary.LittleEndian.PutUint32(data[80:84], 1) // totalTxs = 1
-	data[84] = 0xFD                                // 3-byte varint prefix
-	data[85] = 0x01                                // only 1 extra byte (need 2)
+	data[84] = 0xFD                               // 3-byte varint prefix
+	data[85] = 0x01                               // only 1 extra byte (need 2)
 
 	_, _, _, _, err := ParseBIP37MerkleBlock(data, make([]byte, 32))
 	require.Error(t, err)
@@ -803,10 +803,10 @@ func TestParseBIP37MerkleBlock_InvalidHashCountVarInt(t *testing.T) {
 func TestParseBIP37MerkleBlock_HashCountExceedsData(t *testing.T) {
 	// Valid header + totalTxs, claim 1000 hashes but only have a few bytes
 	data := make([]byte, 88)
-	binary.LittleEndian.PutUint32(data[80:84], 1) // totalTxs = 1
-	data[84] = 0xFD                                // 3-byte varint
+	binary.LittleEndian.PutUint32(data[80:84], 1)    // totalTxs = 1
+	data[84] = 0xFD                                  // 3-byte varint
 	binary.LittleEndian.PutUint16(data[85:87], 1000) // 1000 hashes
-	data[87] = 0x00                                // just padding
+	data[87] = 0x00                                  // just padding
 
 	_, _, _, _, err := ParseBIP37MerkleBlock(data, make([]byte, 32))
 	require.Error(t, err)
