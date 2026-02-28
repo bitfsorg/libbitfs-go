@@ -13,7 +13,7 @@ func acquireLock(path string) (*os.File, error) {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("acquire lock: %w", err)
 	}
 	return f, nil
@@ -26,7 +26,7 @@ func tryLock(path string) (*os.File, error) {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("lock held by another process: %w", err)
 	}
 	return f, nil
@@ -37,6 +37,6 @@ func releaseLock(f *os.File) {
 	if f == nil {
 		return
 	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	f.Close()
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
 }
