@@ -19,7 +19,7 @@ type mockPostClient struct {
 
 func (m *mockPostClient) Post(url, contentType string, body io.Reader) (*http.Response, error) {
 	// Rewrite the URL to point to the test server, same logic as Get.
-	return m.mockHTTPClient.rewriteAndDo("POST", url, contentType, body)
+	return m.rewriteAndDo("POST", url, contentType, body)
 }
 
 // rewriteAndDo rewrites the URL to the test server and performs the request.
