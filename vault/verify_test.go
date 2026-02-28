@@ -13,7 +13,7 @@ import (
 )
 
 func TestEngineVerifyTx_Offline(t *testing.T) {
-	eng := &Engine{} // no Chain, no SPV
+	eng := &Vault{} // no Chain, no SPV
 	_, err := eng.VerifyTx(context.Background(), "sometxid")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no blockchain service")
@@ -27,7 +27,7 @@ func TestEngineVerifyTx_Unconfirmed(t *testing.T) {
 	}
 
 	store := spv.NewMemHeaderStore()
-	eng := &Engine{
+	eng := &Vault{
 		Chain: mock,
 		SPV:   network.NewSPVClient(mock, store),
 	}
@@ -39,7 +39,7 @@ func TestEngineVerifyTx_Unconfirmed(t *testing.T) {
 
 // confirmedTestSetup creates a mock chain, header store, and engine for testing
 // confirmed tx verification. Returns (engine, txid display hex, block hash display hex).
-func confirmedTestSetup(t *testing.T) (*Engine, string, string, *spv.BlockHeader) {
+func confirmedTestSetup(t *testing.T) (*Vault, string, string, *spv.BlockHeader) {
 	t.Helper()
 	txHash := spv.DoubleHash([]byte("test-tx"))
 	merkleRoot := txHash
@@ -82,7 +82,7 @@ func confirmedTestSetup(t *testing.T) (*Engine, string, string, *spv.BlockHeader
 		},
 	}
 
-	eng := &Engine{
+	eng := &Vault{
 		Chain: mock,
 		SPV:   network.NewSPVClient(mock, store),
 	}
@@ -173,7 +173,7 @@ func TestEngineBroadcastTx_StoresTx(t *testing.T) {
 	require.NoError(t, err)
 	defer boltStore.Close()
 
-	eng := &Engine{
+	eng := &Vault{
 		Chain:    mock,
 		SPVStore: boltStore,
 	}
@@ -200,14 +200,14 @@ func TestEngineBroadcastTx_NoStoreWhenOffline(t *testing.T) {
 		},
 	}
 
-	eng := &Engine{Chain: mock} // no SPVStore
+	eng := &Vault{Chain: mock} // no SPVStore
 	txid, err := eng.BroadcastTx(context.Background(), "aabb")
 	require.NoError(t, err)
 	assert.Equal(t, "txid123", txid)
 }
 
 func TestEngineInitSPV_NilChain(t *testing.T) {
-	eng := &Engine{}
+	eng := &Vault{}
 	err := eng.InitSPV()
 	require.NoError(t, err)
 	assert.Nil(t, eng.SPV)
@@ -217,7 +217,7 @@ func TestEngineInitSPV_NilChain(t *testing.T) {
 func TestEngineInitSPV_WithChain(t *testing.T) {
 	dir := t.TempDir()
 	mock := &network.MockBlockchainService{}
-	eng := &Engine{
+	eng := &Vault{
 		Chain:   mock,
 		DataDir: dir,
 	}

@@ -13,7 +13,7 @@ import (
 // setupMoveTestEngine sets up a test engine with root, /src, /dst directories,
 // and a file at /src/file.txt. Returns the engine. Multiple fee UTXOs are
 // pre-loaded to support cross-directory moves (atomic batch with 4 ops).
-func setupMoveTestEngine(t *testing.T) *Engine {
+func setupMoveTestEngine(t *testing.T) *Vault {
 	t.Helper()
 	eng := initTestEngine(t)
 

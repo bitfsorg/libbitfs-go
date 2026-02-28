@@ -21,24 +21,24 @@ type MoveOpts struct {
 
 // Move renames or moves a node. Same-directory renames update a single parent;
 // cross-directory moves update both the source and destination parents.
-func (e *Engine) Move(opts *MoveOpts) (*Result, error) {
+func (v *Vault) Move(opts *MoveOpts) (*Result, error) {
 	srcDir := path.Dir(opts.SrcPath)
 	dstDir := path.Dir(opts.DstPath)
 
 	// Find the source node.
-	nodeState := e.State.FindNodeByPath(opts.SrcPath)
+	nodeState := v.State.FindNodeByPath(opts.SrcPath)
 	if nodeState == nil {
-		return nil, fmt.Errorf("engine: source %q not found", opts.SrcPath)
+		return nil, fmt.Errorf("vault: source %q not found", opts.SrcPath)
 	}
 
 	if srcDir != dstDir {
-		return e.crossDirectoryMove(opts, nodeState)
+		return v.crossDirectoryMove(opts, nodeState)
 	}
 
 	// Find the parent directory.
-	parent, err := e.resolveParentDir(srcDir, opts.VaultIndex)
+	parent, err := v.resolveParentDir(srcDir, opts.VaultIndex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent directory %q not found", srcDir)
+		return nil, fmt.Errorf("vault: parent directory %q not found", srcDir)
 	}
 
 	// Check destination name doesn't exist.
@@ -46,7 +46,7 @@ func (e *Engine) Move(opts *MoveOpts) (*Result, error) {
 	srcName := path.Base(opts.SrcPath)
 	for _, c := range parent.Children {
 		if c.Name == dstName {
-			return nil, fmt.Errorf("engine: %q already exists in %q", dstName, srcDir)
+			return nil, fmt.Errorf("vault: %q already exists in %q", dstName, srcDir)
 		}
 	}
 
@@ -59,14 +59,14 @@ func (e *Engine) Move(opts *MoveOpts) (*Result, error) {
 		}
 	}
 	if renamedIdx == -1 {
-		return nil, fmt.Errorf("engine: %q not found in parent children", srcName)
+		return nil, fmt.Errorf("vault: %q not found in parent children", srcName)
 	}
 
 	parent.Children[renamedIdx].Name = dstName
-	txHex, txIDHex, err := e.buildParentSelfUpdate(parent)
+	txHex, txIDHex, err := v.buildParentSelfUpdate(parent)
 	if err != nil {
 		parent.Children[renamedIdx].Name = srcName // restore on failure
-		return nil, fmt.Errorf("engine: update parent: %w", err)
+		return nil, fmt.Errorf("vault: update parent: %w", err)
 	}
 
 	// TX build succeeded — apply remaining state changes.
@@ -91,11 +91,11 @@ func (e *Engine) Move(opts *MoveOpts) (*Result, error) {
 //
 // All four operations are packed into one transaction: single fee UTXO, single
 // signing pass, fully atomic. If any part fails, nothing is broadcast.
-func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*Result, error) {
+func (v *Vault) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*Result, error) {
 	// Cross-directory move only supports files.
 	// Directory moves would require recursive re-keying of all descendants.
 	if srcNodeState.Type == "dir" {
-		return nil, fmt.Errorf("engine: cross-directory move of directories is not supported")
+		return nil, fmt.Errorf("vault: cross-directory move of directories is not supported")
 	}
 
 	srcDir := path.Dir(opts.SrcPath)
@@ -104,21 +104,21 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	dstName := path.Base(opts.DstPath)
 
 	// 1. Find source parent directory.
-	srcParent, err := e.resolveParentDir(srcDir, opts.VaultIndex)
+	srcParent, err := v.resolveParentDir(srcDir, opts.VaultIndex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: source directory %q: %w", srcDir, err)
+		return nil, fmt.Errorf("vault: source directory %q: %w", srcDir, err)
 	}
 
 	// 2. Find destination parent directory.
-	dstParent, err := e.resolveParentDir(dstDir, opts.VaultIndex)
+	dstParent, err := v.resolveParentDir(dstDir, opts.VaultIndex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: destination directory %q: %w", dstDir, err)
+		return nil, fmt.Errorf("vault: destination directory %q: %w", dstDir, err)
 	}
 
 	// 3. Check destination doesn't already have this name.
 	for _, c := range dstParent.Children {
 		if c.Name == dstName {
-			return nil, fmt.Errorf("engine: %q already exists in %q", dstName, dstDir)
+			return nil, fmt.Errorf("vault: %q already exists in %q", dstName, dstDir)
 		}
 	}
 
@@ -131,23 +131,23 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 		}
 	}
 	if srcChildIdx == -1 {
-		return nil, fmt.Errorf("engine: %q not found in source directory", srcName)
+		return nil, fmt.Errorf("vault: %q not found in source directory", srcName)
 	}
 
 	// 5. Read encrypted content from store via source KeyHash.
 	srcKeyHash, err := hex.DecodeString(srcNodeState.KeyHash)
 	if err != nil {
-		return nil, fmt.Errorf("engine: invalid source key hash: %w", err)
+		return nil, fmt.Errorf("vault: invalid source key hash: %w", err)
 	}
-	ciphertext, err := e.Store.Get(srcKeyHash)
+	ciphertext, err := v.Store.Get(srcKeyHash)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read source content: %w", err)
+		return nil, fmt.Errorf("vault: read source content: %w", err)
 	}
 
 	// 6. Decrypt with source node's Method 42 key.
-	srcKP, err := e.Wallet.DeriveNodeKey(srcNodeState.VaultIndex, srcNodeState.ChildIndices, nil)
+	srcKP, err := v.Wallet.DeriveNodeKey(srcNodeState.VaultIndex, srcNodeState.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive source key: %w", err)
+		return nil, fmt.Errorf("vault: derive source key: %w", err)
 	}
 
 	var srcAccess method42.Access
@@ -155,29 +155,29 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	case "private":
 		srcAccess = method42.AccessPrivate
 	case "paid":
-		return nil, fmt.Errorf("engine: %q has paid access; use daemon buyer workflow to purchase content", opts.SrcPath)
+		return nil, fmt.Errorf("vault: %q has paid access; use daemon buyer workflow to purchase content", opts.SrcPath)
 	default:
 		srcAccess = method42.AccessFree
 	}
 
 	decResult, err := method42.Decrypt(ciphertext, srcKP.PrivateKey, srcKP.PublicKey, srcKeyHash, srcAccess)
 	if err != nil {
-		return nil, fmt.Errorf("engine: decrypt source: %w", err)
+		return nil, fmt.Errorf("vault: decrypt source: %w", err)
 	}
 
 	// 7. Derive new child key at destination (new HD index).
 	childIdx := dstParent.NextChildIdx
 	childIndices := append(append([]uint32{}, dstParent.ChildIndices...), childIdx)
-	childKP, err := e.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
+	childKP, err := v.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive child key: %w", err)
+		return nil, fmt.Errorf("vault: derive child key: %w", err)
 	}
 	childPubHex := hex.EncodeToString(childKP.PublicKey.Compressed())
 
 	// 8. Re-encrypt with new key.
 	encResult, err := method42.Encrypt(decResult.Plaintext, childKP.PrivateKey, childKP.PublicKey, srcAccess)
 	if err != nil {
-		return nil, fmt.Errorf("engine: encrypt copy: %w", err)
+		return nil, fmt.Errorf("vault: encrypt copy: %w", err)
 	}
 
 	// --- Build single atomic batch with 4 ops ---
@@ -212,7 +212,7 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	}
 	createPayload, err := serializePayloadForChain(createNode, childKP.PrivateKey, childKP.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize create payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize create payload: %w", err)
 	}
 
 	// Build Op2 payload: Delete source node.
@@ -225,7 +225,7 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	}
 	deletePayload, err := metanet.SerializePayload(deleteNode)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize delete payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize delete payload: %w", err)
 	}
 
 	// Build Op3 payload: Update source parent (remove child entry).
@@ -235,14 +235,14 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 
 	origSrcChildren := srcParent.Children
 	srcParent.Children = srcChildrenAfter
-	srcParentPayload, err := e.buildParentUpdatePayload(srcParent, nil)
+	srcParentPayload, err := v.buildParentUpdatePayload(srcParent, nil)
 	srcParent.Children = origSrcChildren // restore
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize src parent payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize src parent payload: %w", err)
 	}
 
 	// Build Op4 payload: Update destination parent (add child entry).
-	dstParentPayload, err := e.buildParentUpdatePayload(dstParent, &ChildState{
+	dstParentPayload, err := v.buildParentUpdatePayload(dstParent, &ChildState{
 		Name:     dstName,
 		Type:     srcNodeState.Type,
 		PubKey:   childPubHex,
@@ -250,33 +250,33 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 		Hardened: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize dst parent payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize dst parent payload: %w", err)
 	}
 
 	// Allocate UTXOs: dst parent, src node, src parent, fee.
 	dstParentTxID, err := TxIDBytes(dstParent.TxID)
 	if err != nil {
-		return nil, fmt.Errorf("engine: dst parent txid: %w", err)
+		return nil, fmt.Errorf("vault: dst parent txid: %w", err)
 	}
-	dstParentUTXO, dstParentUS, err := e.getNodeUTXOWithState(dstParent.PubKeyHex)
+	dstParentUTXO, dstParentUS, err := v.getNodeUTXOWithState(dstParent.PubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: dst parent UTXO: %w", err)
+		return nil, fmt.Errorf("vault: dst parent UTXO: %w", err)
 	}
 
-	srcNodeUTXO, srcNodeUS, err := e.getNodeUTXOWithState(srcNodeState.PubKeyHex)
+	srcNodeUTXO, srcNodeUS, err := v.getNodeUTXOWithState(srcNodeState.PubKeyHex)
 	if err != nil {
 		dstParentUS.Spent = false
-		return nil, fmt.Errorf("engine: src node UTXO: %w", err)
+		return nil, fmt.Errorf("vault: src node UTXO: %w", err)
 	}
 
-	srcParentUTXO, srcParentUS, err := e.getNodeUTXOWithState(srcParent.PubKeyHex)
+	srcParentUTXO, srcParentUS, err := v.getNodeUTXOWithState(srcParent.PubKeyHex)
 	if err != nil {
 		dstParentUS.Spent = false
 		srcNodeUS.Spent = false
-		return nil, fmt.Errorf("engine: src parent UTXO: %w", err)
+		return nil, fmt.Errorf("vault: src parent UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		dstParentUS.Spent = false
 		srcNodeUS.Spent = false
@@ -285,7 +285,7 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(5000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(5000)
 	if err != nil {
 		dstParentUS.Spent = false
 		srcNodeUS.Spent = false
@@ -304,9 +304,9 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	}()
 
 	// Derive keys for all participants.
-	dstParentKP, err := e.Wallet.DeriveNodeKey(dstParent.VaultIndex, dstParent.ChildIndices, nil)
+	dstParentKP, err := v.Wallet.DeriveNodeKey(dstParent.VaultIndex, dstParent.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive dst parent key: %w", err)
+		return nil, fmt.Errorf("vault: derive dst parent key: %w", err)
 	}
 	var dstParentParentTxID []byte
 	if dstParent.ParentTxID != "" {
@@ -320,13 +320,13 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	if srcNodeState.ParentTxID != "" {
 		srcParentTxIDBytes, err = TxIDBytes(srcNodeState.ParentTxID)
 		if err != nil {
-			return nil, fmt.Errorf("engine: src parent txid: %w", err)
+			return nil, fmt.Errorf("vault: src parent txid: %w", err)
 		}
 	}
 
-	srcParentKP, err := e.Wallet.DeriveNodeKey(srcParent.VaultIndex, srcParent.ChildIndices, nil)
+	srcParentKP, err := v.Wallet.DeriveNodeKey(srcParent.VaultIndex, srcParent.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive src parent key: %w", err)
+		return nil, fmt.Errorf("vault: derive src parent key: %w", err)
 	}
 	var srcParentParentTxID []byte
 	if srcParent.ParentTxID != "" {
@@ -357,12 +357,12 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch cross-move tx: %w", err)
+		return nil, fmt.Errorf("vault: batch cross-move tx: %w", err)
 	}
 
 	// Store new encrypted content.
-	if err := e.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
-		return nil, fmt.Errorf("engine: store copy: %w", err)
+	if err := v.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
+		return nil, fmt.Errorf("vault: store copy: %w", err)
 	}
 
 	allSuccess = true
@@ -392,7 +392,7 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	if srcNodeState.PricePerKB > 0 {
 		childState.PricePerKB = srcNodeState.PricePerKB
 	}
-	e.State.SetNode(childPubHex, childState)
+	v.State.SetNode(childPubHex, childState)
 
 	// Update destination parent.
 	dstParent.Children = append(dstParent.Children, &ChildState{
@@ -414,10 +414,10 @@ func (e *Engine) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*R
 	srcParent.TxID = txIDHex
 
 	// Clean up old encrypted content (best-effort).
-	_ = e.Store.Delete(srcKeyHash)
+	_ = v.Store.Delete(srcKeyHash)
 
 	// Track batch UTXOs: [0]=child(create), [1]=delete(nil), [2]=srcParent, [3]=dstParent.
-	e.TrackBatchUTXOs(result, []string{childPubHex, "", srcParent.PubKeyHex, dstParent.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{childPubHex, "", srcParent.PubKeyHex, dstParent.PubKeyHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,

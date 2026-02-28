@@ -62,7 +62,7 @@ func TestCat_PrivateFile(t *testing.T) {
 }
 
 // setupPrivateFileEngine creates an engine with a private file at /secret.txt.
-func setupPrivateFileEngine(t *testing.T) *Engine {
+func setupPrivateFileEngine(t *testing.T) *Vault {
 	t.Helper()
 	eng := initTestEngine(t)
 

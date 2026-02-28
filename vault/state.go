@@ -98,12 +98,12 @@ func LoadLocalState(path string) (*LocalState, error) {
 		if os.IsNotExist(err) {
 			return NewLocalState(path), nil
 		}
-		return nil, fmt.Errorf("engine: read local state: %w", err)
+		return nil, fmt.Errorf("vault: read local state: %w", err)
 	}
 
 	var state LocalState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("engine: parse local state: %w", err)
+		return nil, fmt.Errorf("vault: parse local state: %w", err)
 	}
 	if state.Nodes == nil {
 		state.Nodes = make(map[string]*NodeState)
@@ -128,11 +128,11 @@ func (s *LocalState) Save() error {
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return fmt.Errorf("engine: marshal local state: %w", err)
+		return fmt.Errorf("vault: marshal local state: %w", err)
 	}
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("engine: create state directory: %w", err)
+		return fmt.Errorf("vault: create state directory: %w", err)
 	}
 	return os.WriteFile(s.path, data, 0600)
 }
@@ -277,10 +277,10 @@ func (s *LocalState) RemovePublishBinding(domain string) bool {
 func TxIDBytes(hexStr string) ([]byte, error) {
 	b, err := hex.DecodeString(hexStr)
 	if err != nil {
-		return nil, fmt.Errorf("engine: invalid txid hex: %w", err)
+		return nil, fmt.Errorf("vault: invalid txid hex: %w", err)
 	}
 	if len(b) != 32 {
-		return nil, fmt.Errorf("engine: txid must be 32 bytes, got %d", len(b))
+		return nil, fmt.Errorf("vault: txid must be 32 bytes, got %d", len(b))
 	}
 	return b, nil
 }

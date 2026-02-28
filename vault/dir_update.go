@@ -11,18 +11,18 @@ import (
 
 // resolveParentDir finds the parent directory node for a given directory path.
 // Handles the root directory case (path "/" or ".").
-func (e *Engine) resolveParentDir(dirPath string, vaultIdx uint32) (*NodeState, error) {
-	parent := e.State.FindNodeByPath(dirPath)
+func (v *Vault) resolveParentDir(dirPath string, vaultIdx uint32) (*NodeState, error) {
+	parent := v.State.FindNodeByPath(dirPath)
 	if parent != nil {
 		return parent, nil
 	}
 
 	if dirPath == "/" || dirPath == "." {
-		rootPubHex, err := e.getRootPubHex(vaultIdx)
+		rootPubHex, err := v.getRootPubHex(vaultIdx)
 		if err != nil {
 			return nil, err
 		}
-		parent = e.State.GetNode(rootPubHex)
+		parent = v.State.GetNode(rootPubHex)
 		if parent != nil {
 			return parent, nil
 		}
@@ -34,7 +34,7 @@ func (e *Engine) resolveParentDir(dirPath string, vaultIdx uint32) (*NodeState, 
 // buildParentUpdatePayload builds a serialized payload for a parent directory update.
 // If newChild is non-nil, it is appended to the parent's children list for the payload
 // (but the caller is responsible for updating parent.Children in local state).
-func (e *Engine) buildParentUpdatePayload(parent *NodeState, newChild *ChildState) ([]byte, error) {
+func (v *Vault) buildParentUpdatePayload(parent *NodeState, newChild *ChildState) ([]byte, error) {
 	var children []metanet.ChildEntry
 	for _, c := range parent.Children {
 		children = append(children, metanet.ChildEntry{
@@ -82,13 +82,13 @@ func (e *Engine) buildParentUpdatePayload(parent *NodeState, newChild *ChildStat
 // buildParentSelfUpdate builds and signs a SelfUpdate transaction for a parent
 // directory node, reflecting its current children list using MutationBatch.
 // Returns the signed tx hex and tx ID hex.
-func (e *Engine) buildParentSelfUpdate(parent *NodeState) (txHex string, txIDHex string, err error) {
-	parentKP, err := e.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
+func (v *Vault) buildParentSelfUpdate(parent *NodeState) (txHex string, txIDHex string, err error) {
+	parentKP, err := v.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("derive parent key: %w", err)
 	}
 
-	payload, err := e.buildParentUpdatePayload(parent, nil)
+	payload, err := v.buildParentUpdatePayload(parent, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("serialize payload: %w", err)
 	}
@@ -101,19 +101,19 @@ func (e *Engine) buildParentSelfUpdate(parent *NodeState) (txHex string, txIDHex
 		}
 	}
 
-	parentUTXO, parentUS, err := e.getNodeUTXOWithState(parent.PubKeyHex)
+	parentUTXO, parentUS, err := v.getNodeUTXOWithState(parent.PubKeyHex)
 	if err != nil {
 		return "", "", fmt.Errorf("parent UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		parentUS.Spent = false
 		return "", "", err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(2000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(2000)
 	if err != nil {
 		parentUS.Spent = false
 		return "", "", err
@@ -140,7 +140,7 @@ func (e *Engine) buildParentSelfUpdate(parent *NodeState) (txHex string, txIDHex
 	success = true
 	txIDHex = hex.EncodeToString(result.TxID)
 
-	e.TrackBatchUTXOs(result, []string{parent.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{parent.PubKeyHex}, changePubHex)
 
 	return signedHex, txIDHex, nil
 }

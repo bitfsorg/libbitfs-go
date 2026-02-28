@@ -17,22 +17,22 @@ type RemoveOpts struct {
 }
 
 // Remove marks a node as deleted via SelfUpdate transaction.
-func (e *Engine) Remove(opts *RemoveOpts) (*Result, error) {
+func (v *Vault) Remove(opts *RemoveOpts) (*Result, error) {
 	// Find the node.
-	nodeState := e.State.FindNodeByPath(opts.Path)
+	nodeState := v.State.FindNodeByPath(opts.Path)
 	if nodeState == nil {
-		return nil, fmt.Errorf("engine: node %q not found", opts.Path)
+		return nil, fmt.Errorf("vault: node %q not found", opts.Path)
 	}
 
 	// Reject non-empty directory removal.
 	if nodeState.Type == "dir" && len(nodeState.Children) > 0 {
-		return nil, fmt.Errorf("engine: directory %q is not empty (%d children)", opts.Path, len(nodeState.Children))
+		return nil, fmt.Errorf("vault: directory %q is not empty (%d children)", opts.Path, len(nodeState.Children))
 	}
 
 	// Derive key pair.
-	kp, err := e.Wallet.DeriveNodeKey(nodeState.VaultIndex, nodeState.ChildIndices, nil)
+	kp, err := v.Wallet.DeriveNodeKey(nodeState.VaultIndex, nodeState.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive key: %w", err)
+		return nil, fmt.Errorf("vault: derive key: %w", err)
 	}
 
 	// Build delete payload.
@@ -45,7 +45,7 @@ func (e *Engine) Remove(opts *RemoveOpts) (*Result, error) {
 
 	payload, err := metanet.SerializePayload(node)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
 	// Get parent TxID.
@@ -58,19 +58,19 @@ func (e *Engine) Remove(opts *RemoveOpts) (*Result, error) {
 	}
 
 	// Get node UTXO.
-	nodeUTXO, nodeUS, err := e.getNodeUTXOWithState(nodeState.PubKeyHex)
+	nodeUTXO, nodeUS, err := v.getNodeUTXOWithState(nodeState.PubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: node UTXO: %w", err)
+		return nil, fmt.Errorf("vault: node UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		nodeUS.Spent = false
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(2000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(2000)
 	if err != nil {
 		nodeUS.Spent = false
 		return nil, err
@@ -91,7 +91,7 @@ func (e *Engine) Remove(opts *RemoveOpts) (*Result, error) {
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch remove tx: %w", err)
+		return nil, fmt.Errorf("vault: batch remove tx: %w", err)
 	}
 
 	success = true
@@ -99,11 +99,11 @@ func (e *Engine) Remove(opts *RemoveOpts) (*Result, error) {
 
 	// Update local state.
 	nodeState.TxID = txIDHex
-	e.TrackBatchUTXOs(result, []string{nodeState.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{nodeState.PubKeyHex}, changePubHex)
 
 	// --- Update parent directory to remove child entry ---
 	parentDir := path.Dir(opts.Path)
-	parent, parentErr := e.resolveParentDir(parentDir, opts.VaultIndex)
+	parent, parentErr := v.resolveParentDir(parentDir, opts.VaultIndex)
 	if parentErr != nil {
 		// Best effort: return node-only result with a warning.
 		return &Result{
@@ -126,7 +126,7 @@ func (e *Engine) Remove(opts *RemoveOpts) (*Result, error) {
 	// Temporarily swap children for the build, then restore.
 	origChildren := parent.Children
 	parent.Children = childrenAfter
-	parentTxHex, parentTxIDHex, parentBuildErr := e.buildParentSelfUpdate(parent)
+	parentTxHex, parentTxIDHex, parentBuildErr := v.buildParentSelfUpdate(parent)
 	parent.Children = origChildren // restore
 	if parentBuildErr != nil {
 		// Best effort: return node-only result with a warning.

@@ -59,61 +59,61 @@ func mustDecompressPubKey(hexStr string) *ec.PublicKey {
 
 // ResolveParentNode finds the parent directory node for a given path.
 // Returns the parent's NodeState and the child name.
-func (e *Engine) ResolveParentNode(remotePath string, vaultIdx uint32) (*NodeState, string, error) {
+func (v *Vault) ResolveParentNode(remotePath string, vaultIdx uint32) (*NodeState, string, error) {
 	dir := path.Dir(remotePath)
 	name := path.Base(remotePath)
 
 	if dir == "/" || dir == "." {
 		// Parent is root.
-		rootPubHex, err := e.getRootPubHex(vaultIdx)
+		rootPubHex, err := v.getRootPubHex(vaultIdx)
 		if err != nil {
 			return nil, "", err
 		}
-		rootNode := e.State.GetNode(rootPubHex)
+		rootNode := v.State.GetNode(rootPubHex)
 		if rootNode == nil {
-			return nil, "", fmt.Errorf("engine: root node not initialized; run 'bitfs mkdir /' first")
+			return nil, "", fmt.Errorf("vault: root node not initialized; run 'bitfs mkdir /' first")
 		}
 		return rootNode, name, nil
 	}
 
-	parent := e.State.FindNodeByPath(dir)
+	parent := v.State.FindNodeByPath(dir)
 	if parent == nil {
-		return nil, "", fmt.Errorf("engine: parent directory %q not found", dir)
+		return nil, "", fmt.Errorf("vault: parent directory %q not found", dir)
 	}
 	if parent.Type != "dir" {
-		return nil, "", fmt.Errorf("engine: %q is not a directory", dir)
+		return nil, "", fmt.Errorf("vault: %q is not a directory", dir)
 	}
 	return parent, name, nil
 }
 
 // EnsureRootExists creates the vault root node if it doesn't exist.
-func (e *Engine) EnsureRootExists(vaultIdx uint32) (*NodeState, *Result, error) {
-	rootPubHex, err := e.getRootPubHex(vaultIdx)
+func (v *Vault) EnsureRootExists(vaultIdx uint32) (*NodeState, *Result, error) {
+	rootPubHex, err := v.getRootPubHex(vaultIdx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	existing := e.State.GetNode(rootPubHex)
+	existing := v.State.GetNode(rootPubHex)
 	if existing != nil {
 		return existing, nil, nil
 	}
 
 	// Create root node.
-	return e.createRootNode(vaultIdx, rootPubHex)
+	return v.createRootNode(vaultIdx, rootPubHex)
 }
 
 // getRootPubHex returns the hex pubkey for a vault's root node.
-func (e *Engine) getRootPubHex(vaultIdx uint32) (string, error) {
-	kp, err := e.Wallet.DeriveVaultRootKey(vaultIdx)
+func (v *Vault) getRootPubHex(vaultIdx uint32) (string, error) {
+	kp, err := v.Wallet.DeriveVaultRootKey(vaultIdx)
 	if err != nil {
-		return "", fmt.Errorf("engine: derive vault root key: %w", err)
+		return "", fmt.Errorf("vault: derive vault root key: %w", err)
 	}
 	return hex.EncodeToString(kp.PublicKey.Compressed()), nil
 }
 
 // createRootNode creates and tracks a new root node transaction.
-func (e *Engine) createRootNode(vaultIdx uint32, rootPubHex string) (*NodeState, *Result, error) {
-	kp, err := e.Wallet.DeriveVaultRootKey(vaultIdx)
+func (v *Vault) createRootNode(vaultIdx uint32, rootPubHex string) (*NodeState, *Result, error) {
+	kp, err := v.Wallet.DeriveVaultRootKey(vaultIdx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -126,7 +126,7 @@ func (e *Engine) createRootNode(vaultIdx uint32, rootPubHex string) (*NodeState,
 		Timestamp: uint64(time.Now().Unix()),
 	}
 
-	result, err := e.buildAndSignRootTx(kp, node, rootPubHex)
+	result, err := v.buildAndSignRootTx(kp, node, rootPubHex)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,28 +142,28 @@ func (e *Engine) createRootNode(vaultIdx uint32, rootPubHex string) (*NodeState,
 		Children:     make([]*ChildState, 0),
 	}
 
-	e.State.SetNode(rootPubHex, rootState)
-	e.State.mu.Lock()
-	e.State.RootTxID[vaultIdx] = result.TxID
-	e.State.mu.Unlock()
+	v.State.SetNode(rootPubHex, rootState)
+	v.State.mu.Lock()
+	v.State.RootTxID[vaultIdx] = result.TxID
+	v.State.mu.Unlock()
 
 	return rootState, result, nil
 }
 
 // buildAndSignRootTx builds and signs a CreateRoot transaction using MutationBatch.
-func (e *Engine) buildAndSignRootTx(kp *wallet.KeyPair, node *metanet.Node, nodePubHex string) (*Result, error) {
+func (v *Vault) buildAndSignRootTx(kp *wallet.KeyPair, node *metanet.Node, nodePubHex string) (*Result, error) {
 	payload, err := metanet.SerializePayload(node)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(2000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(2000)
 	if err != nil {
 		return nil, err
 	}
@@ -182,11 +182,11 @@ func (e *Engine) buildAndSignRootTx(kp *wallet.KeyPair, node *metanet.Node, node
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch root tx: %w", err)
+		return nil, fmt.Errorf("vault: batch root tx: %w", err)
 	}
 
 	success = true
-	e.TrackBatchUTXOs(result, []string{nodePubHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{nodePubHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,
@@ -208,13 +208,13 @@ func serializePayloadForChain(node *metanet.Node, privKey *ec.PrivateKey, pubKey
 	// Serialize the full TLV (all metadata fields).
 	fullTLV, err := metanet.SerializePayload(node)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize full TLV: %w", err)
+		return nil, fmt.Errorf("vault: serialize full TLV: %w", err)
 	}
 
 	// Encrypt the full TLV as metadata.
 	encPayload, err := method42.EncryptMetadata(fullTLV, privKey, pubKey)
 	if err != nil {
-		return nil, fmt.Errorf("engine: encrypt metadata: %w", err)
+		return nil, fmt.Errorf("vault: encrypt metadata: %w", err)
 	}
 
 	// Build minimal cleartext envelope with only structural fields.
@@ -298,5 +298,17 @@ func AccessString(al metanet.AccessLevel) string {
 		return "paid"
 	default:
 		return "unknown"
+	}
+}
+
+// nodeTypeFromString converts a string to a metanet.NodeType.
+func nodeTypeFromString(s string) metanet.NodeType {
+	switch s {
+	case "dir":
+		return metanet.NodeTypeDir
+	case "link":
+		return metanet.NodeTypeLink
+	default:
+		return metanet.NodeTypeFile
 	}
 }

@@ -16,8 +16,8 @@ import (
 const testPassword = "testpass"
 
 // initTestEngine creates a temporary data directory with an initialized wallet
-// and returns a ready-to-use Engine. The wallet has a "default" vault at index 0.
-func initTestEngine(t *testing.T) *Engine {
+// and returns a ready-to-use Vault. The wallet has a "default" vault at index 0.
+func initTestEngine(t *testing.T) *Vault {
 	t.Helper()
 	dataDir := t.TempDir()
 
@@ -68,7 +68,7 @@ func initTestEngine(t *testing.T) *Engine {
 	return eng
 }
 
-// --- Engine construction tests ---
+// --- Vault construction tests ---
 
 func TestNew_Success(t *testing.T) {
 	eng := initTestEngine(t)
@@ -209,33 +209,6 @@ func TestDeriveChangeAddr(t *testing.T) {
 	}
 	if eng.WState.NextChangeIndex != startIdx+1 {
 		t.Error("NextChangeIndex should be incremented")
-	}
-}
-
-// --- Publish tests ---
-
-func TestPublish(t *testing.T) {
-	eng := initTestEngine(t)
-
-	result, err := eng.Publish(&PublishOpts{
-		VaultIndex: 0,
-		Domain:     "example.com",
-	})
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-
-	if !strings.Contains(result.Message, "example.com") {
-		t.Errorf("message should mention domain, got: %s", result.Message)
-	}
-	if !strings.Contains(result.Message, "_bitfs.example.com") {
-		t.Errorf("message should contain DNS TXT record, got: %s", result.Message)
-	}
-	if result.NodePub == "" {
-		t.Error("NodePub should not be empty")
-	}
-	if result.TxHex != "" {
-		t.Error("Publish should not produce a transaction")
 	}
 }
 
@@ -460,120 +433,6 @@ func TestTrackNewUTXOs_NilOutputs(t *testing.T) {
 	eng.TrackNewUTXOs(&tx.MetanetTx{}, "", "")
 	if len(eng.State.UTXOs) != 0 {
 		t.Error("no UTXOs should be added for nil outputs")
-	}
-}
-
-// --- Daemon adapter tests ---
-
-func TestWalletAdapter_GetSellerKeyPair(t *testing.T) {
-	eng := initTestEngine(t)
-	adapter := NewWalletAdapter(eng)
-
-	priv, pub, err := adapter.GetSellerKeyPair()
-	if err != nil {
-		t.Fatalf("GetSellerKeyPair: %v", err)
-	}
-	if priv == nil || pub == nil {
-		t.Error("keys should not be nil")
-	}
-}
-
-func TestStoreAdapter_GetMissing(t *testing.T) {
-	eng := initTestEngine(t)
-	adapter := NewStoreAdapter(eng)
-
-	missingHash := make([]byte, 32) // 32-byte zero hash
-	_, err := adapter.Get(missingHash)
-	if err == nil {
-		t.Error("Get missing content should fail")
-	}
-}
-
-func TestStoreAdapter_HasMissing(t *testing.T) {
-	eng := initTestEngine(t)
-	adapter := NewStoreAdapter(eng)
-
-	missingHash := make([]byte, 32) // 32-byte zero hash
-	has, err := adapter.Has(missingHash)
-	if err != nil {
-		t.Fatalf("Has: %v", err)
-	}
-	if has {
-		t.Error("Has should return false for missing content")
-	}
-}
-
-func TestStoreAdapter_PutAndGet(t *testing.T) {
-	eng := initTestEngine(t)
-	adapter := NewStoreAdapter(eng)
-
-	keyHash := []byte("abcdef0123456789abcdef0123456789") // 32 bytes
-	data := []byte("hello world")
-
-	if err := eng.Store.Put(keyHash, data); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-
-	has, err := adapter.Has(keyHash)
-	if err != nil {
-		t.Fatalf("Has: %v", err)
-	}
-	if !has {
-		t.Error("Has should return true after Put")
-	}
-
-	got, err := adapter.Get(keyHash)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if string(got) != "hello world" {
-		t.Errorf("Get = %q, want 'hello world'", got)
-	}
-
-	size, err := adapter.Size(keyHash)
-	if err != nil {
-		t.Fatalf("Size: %v", err)
-	}
-	if size != int64(len(data)) {
-		t.Errorf("Size = %d, want %d", size, len(data))
-	}
-}
-
-func TestMetanetAdapter_GetNodeByPath_NotFound(t *testing.T) {
-	eng := initTestEngine(t)
-	adapter := NewMetanetAdapter(eng)
-
-	_, err := adapter.GetNodeByPath("/nonexistent")
-	if err == nil {
-		t.Error("GetNodeByPath for missing path should fail")
-	}
-}
-
-func TestMetanetAdapter_GetNodeByPath_Found(t *testing.T) {
-	eng := initTestEngine(t)
-	eng.State.SetNode("pub1", &NodeState{
-		PubKeyHex: "pub1",
-		Type:      "dir",
-		Path:      "/docs",
-		Access:    "free",
-		Children: []*ChildState{
-			{Name: "readme.txt", Type: "file", PubKey: "pub2"},
-		},
-	})
-
-	adapter := NewMetanetAdapter(eng)
-	info, err := adapter.GetNodeByPath("/docs")
-	if err != nil {
-		t.Fatalf("GetNodeByPath: %v", err)
-	}
-	if info.Type != "dir" {
-		t.Errorf("type = %q, want dir", info.Type)
-	}
-	if info.Access != "free" {
-		t.Errorf("access = %q, want free", info.Access)
-	}
-	if len(info.Children) != 1 || info.Children[0].Name != "readme.txt" {
-		t.Errorf("children = %v, want [readme.txt]", info.Children)
 	}
 }
 

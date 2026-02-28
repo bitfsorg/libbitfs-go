@@ -18,42 +18,42 @@ type LinkOpts struct {
 }
 
 // Link creates a hard or soft link.
-func (e *Engine) Link(opts *LinkOpts) (*Result, error) {
+func (v *Vault) Link(opts *LinkOpts) (*Result, error) {
 	// Find target node.
-	targetNode := e.State.FindNodeByPath(opts.TargetPath)
+	targetNode := v.State.FindNodeByPath(opts.TargetPath)
 	if targetNode == nil {
-		return nil, fmt.Errorf("engine: target %q not found", opts.TargetPath)
+		return nil, fmt.Errorf("vault: target %q not found", opts.TargetPath)
 	}
 
 	if opts.Soft {
-		return e.createSoftLink(opts, targetNode)
+		return v.createSoftLink(opts, targetNode)
 	}
-	return e.createHardLink(opts, targetNode)
+	return v.createHardLink(opts, targetNode)
 }
 
 // createSoftLink creates a new link node (CreateChild tx).
-func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result, error) {
-	_, _, err := e.EnsureRootExists(opts.VaultIndex)
+func (v *Vault) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result, error) {
+	_, _, err := v.EnsureRootExists(opts.VaultIndex)
 	if err != nil {
 		return nil, err
 	}
 
-	parent, childName, err := e.ResolveParentNode(opts.LinkPath, opts.VaultIndex)
+	parent, childName, err := v.ResolveParentNode(opts.LinkPath, opts.VaultIndex)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, c := range parent.Children {
 		if c.Name == childName {
-			return nil, fmt.Errorf("engine: %q already exists in %q", childName, parent.Path)
+			return nil, fmt.Errorf("vault: %q already exists in %q", childName, parent.Path)
 		}
 	}
 
 	childIdx := parent.NextChildIdx
 	childIndices := append(append([]uint32{}, parent.ChildIndices...), childIdx)
-	childKP, err := e.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
+	childKP, err := v.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive child key: %w", err)
+		return nil, fmt.Errorf("vault: derive child key: %w", err)
 	}
 	childPubHex := hex.EncodeToString(childKP.PublicKey.Compressed())
 
@@ -71,7 +71,7 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 
 	payload, err := metanet.SerializePayload(node)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
 	parentTxID, err := TxIDBytes(parent.TxID)
@@ -79,19 +79,19 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 		return nil, err
 	}
 
-	parentUTXO, parentUS, err := e.getNodeUTXOWithState(parent.PubKeyHex)
+	parentUTXO, parentUS, err := v.getNodeUTXOWithState(parent.PubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent UTXO: %w", err)
+		return nil, fmt.Errorf("vault: parent UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		parentUS.Spent = false
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(3000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(3000)
 	if err != nil {
 		parentUS.Spent = false
 		return nil, err
@@ -109,7 +109,7 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 	batch := tx.NewMutationBatch()
 	batch.AddCreateChild(childKP.PublicKey, parentTxID, payload, parentUTXO, parentUTXO.PrivateKey)
 
-	parentPayload, err := e.buildParentUpdatePayload(parent, &ChildState{
+	parentPayload, err := v.buildParentUpdatePayload(parent, &ChildState{
 		Name:     childName,
 		Type:     "link",
 		PubKey:   childPubHex,
@@ -117,12 +117,12 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 		Hardened: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent payload: %w", err)
+		return nil, fmt.Errorf("vault: parent payload: %w", err)
 	}
 
-	parentKP, err := e.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
+	parentKP, err := v.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive parent key: %w", err)
+		return nil, fmt.Errorf("vault: derive parent key: %w", err)
 	}
 	var parentParentTxID []byte
 	if parent.ParentTxID != "" {
@@ -138,7 +138,7 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch link tx: %w", err)
+		return nil, fmt.Errorf("vault: batch link tx: %w", err)
 	}
 
 	success = true
@@ -155,7 +155,7 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 		ChildIndices: childIndices,
 		LinkTarget:   targetNode.PubKeyHex,
 	}
-	e.State.SetNode(childPubHex, childState)
+	v.State.SetNode(childPubHex, childState)
 
 	parent.Children = append(parent.Children, &ChildState{
 		Name:     childName,
@@ -168,7 +168,7 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 	parent.TxID = txIDHex
 
 	// Track batch UTXOs: [0]=link, [1]=parent.
-	e.TrackBatchUTXOs(result, []string{childPubHex, parent.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{childPubHex, parent.PubKeyHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,
@@ -181,15 +181,15 @@ func (e *Engine) createSoftLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 // createHardLink adds a ChildEntry in the parent pointing to the same PubKey.
 // This is a SelfUpdate on the parent directory. Uses build-then-apply pattern
 // to keep state consistent if the TX build fails.
-func (e *Engine) createHardLink(opts *LinkOpts, targetNode *NodeState) (*Result, error) {
-	parent, childName, err := e.ResolveParentNode(opts.LinkPath, opts.VaultIndex)
+func (v *Vault) createHardLink(opts *LinkOpts, targetNode *NodeState) (*Result, error) {
+	parent, childName, err := v.ResolveParentNode(opts.LinkPath, opts.VaultIndex)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, c := range parent.Children {
 		if c.Name == childName {
-			return nil, fmt.Errorf("engine: %q already exists in %q", childName, parent.Path)
+			return nil, fmt.Errorf("vault: %q already exists in %q", childName, parent.Path)
 		}
 	}
 
@@ -211,11 +211,11 @@ func (e *Engine) createHardLink(opts *LinkOpts, targetNode *NodeState) (*Result,
 	origNextIdx := parent.NextChildIdx
 	parent.Children = childrenAfter
 	parent.NextChildIdx = nextIdxAfter
-	txHex, txIDHex, err := e.buildParentSelfUpdate(parent)
+	txHex, txIDHex, err := v.buildParentSelfUpdate(parent)
 	parent.Children = origChildren    // restore
 	parent.NextChildIdx = origNextIdx // restore
 	if err != nil {
-		return nil, fmt.Errorf("engine: build self-update tx: %w", err)
+		return nil, fmt.Errorf("vault: build self-update tx: %w", err)
 	}
 
 	// TX build succeeded — apply state changes.

@@ -18,7 +18,7 @@ func TestEngineBroadcastTx(t *testing.T) {
 		},
 	}
 
-	eng := &Engine{Chain: mock}
+	eng := &Vault{Chain: mock}
 	txid, err := eng.BroadcastTx(context.Background(), "signed_hex_data")
 	require.NoError(t, err)
 	assert.Equal(t, "returned_txid", txid)
@@ -26,7 +26,7 @@ func TestEngineBroadcastTx(t *testing.T) {
 }
 
 func TestEngineBroadcastTxNilChain(t *testing.T) {
-	eng := &Engine{} // no Chain set
+	eng := &Vault{} // no Chain set
 	_, err := eng.BroadcastTx(context.Background(), "hex")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no blockchain service")
@@ -43,7 +43,7 @@ func TestEngineRefreshFeeUTXOs(t *testing.T) {
 	}
 
 	state := NewLocalState("")
-	eng := &Engine{
+	eng := &Vault{
 		Chain: mock,
 		State: state,
 	}
@@ -73,7 +73,7 @@ func TestEngineRefreshFeeUTXOsDedup(t *testing.T) {
 	// Pre-add one UTXO that matches.
 	state.AddUTXO(&UTXOState{TxID: "aabb", Vout: 0, Amount: 50000, Type: "fee"})
 
-	eng := &Engine{Chain: mock, State: state}
+	eng := &Vault{Chain: mock, State: state}
 	err := eng.RefreshFeeUTXOs(context.Background(), "1A1zP1", "pubkeyhex")
 	require.NoError(t, err)
 
@@ -88,18 +88,18 @@ func TestEngineRefreshFeeUTXOsDedup(t *testing.T) {
 }
 
 func TestEngineRefreshFeeUTXOsNilChain(t *testing.T) {
-	eng := &Engine{}
+	eng := &Vault{}
 	err := eng.RefreshFeeUTXOs(context.Background(), "addr", "pub")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no blockchain service")
 }
 
 func TestEngineIsOnline(t *testing.T) {
-	eng := &Engine{Chain: &network.MockBlockchainService{}}
+	eng := &Vault{Chain: &network.MockBlockchainService{}}
 	assert.True(t, eng.IsOnline())
 }
 
 func TestEngineIsOffline(t *testing.T) {
-	eng := &Engine{}
+	eng := &Vault{}
 	assert.False(t, eng.IsOnline())
 }

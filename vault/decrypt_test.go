@@ -11,7 +11,7 @@ import (
 
 // setupDecryptTestEngine creates a test engine with a root and a FREE file
 // at /test-decrypt.txt, then encrypts it to PRIVATE. Returns the engine.
-func setupDecryptTestEngine(t *testing.T) *Engine {
+func setupDecryptTestEngine(t *testing.T) *Vault {
 	t.Helper()
 	eng := initTestEngine(t)
 

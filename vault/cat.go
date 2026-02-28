@@ -23,35 +23,35 @@ type FileInfo struct {
 
 // Cat reads a file from the vault and returns its decrypted content.
 // The caller is responsible for reading from the returned io.Reader.
-func (e *Engine) Cat(opts *CatOpts) (io.Reader, *FileInfo, error) {
+func (v *Vault) Cat(opts *CatOpts) (io.Reader, *FileInfo, error) {
 	// 1. Find the node by path.
-	node := e.State.FindNodeByPath(opts.Path)
+	node := v.State.FindNodeByPath(opts.Path)
 	if node == nil {
-		return nil, nil, fmt.Errorf("engine: %q not found", opts.Path)
+		return nil, nil, fmt.Errorf("vault: %q not found", opts.Path)
 	}
 	if node.Type != "file" {
-		return nil, nil, fmt.Errorf("engine: %q is a %s, not a file", opts.Path, node.Type)
+		return nil, nil, fmt.Errorf("vault: %q is a %s, not a file", opts.Path, node.Type)
 	}
 	if node.KeyHash == "" {
-		return nil, nil, fmt.Errorf("engine: %q has no content (key_hash is empty)", opts.Path)
+		return nil, nil, fmt.Errorf("vault: %q has no content (key_hash is empty)", opts.Path)
 	}
 
 	// 2. Decode key_hash.
 	keyHash, err := hex.DecodeString(node.KeyHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("engine: invalid key_hash for %q: %w", opts.Path, err)
+		return nil, nil, fmt.Errorf("vault: invalid key_hash for %q: %w", opts.Path, err)
 	}
 
 	// 3. Fetch ciphertext via ContentResolver.
-	ciphertext, err := e.Resolver.Fetch(keyHash)
+	ciphertext, err := v.Resolver.Fetch(keyHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("engine: fetch content for %q: %w", opts.Path, err)
+		return nil, nil, fmt.Errorf("vault: fetch content for %q: %w", opts.Path, err)
 	}
 
 	// 4. Derive the node's key pair for decryption.
-	kp, err := e.Wallet.DeriveNodeKey(node.VaultIndex, node.ChildIndices, nil)
+	kp, err := v.Wallet.DeriveNodeKey(node.VaultIndex, node.ChildIndices, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("engine: derive key for %q: %w", opts.Path, err)
+		return nil, nil, fmt.Errorf("vault: derive key for %q: %w", opts.Path, err)
 	}
 
 	// 5. Determine access mode.
@@ -60,7 +60,7 @@ func (e *Engine) Cat(opts *CatOpts) (io.Reader, *FileInfo, error) {
 	case "private":
 		accessMode = method42.AccessPrivate
 	case "paid":
-		return nil, nil, fmt.Errorf("engine: %q has paid access; use daemon buyer workflow to purchase content", opts.Path)
+		return nil, nil, fmt.Errorf("vault: %q has paid access; use daemon buyer workflow to purchase content", opts.Path)
 	default:
 		accessMode = method42.AccessFree
 	}
@@ -68,7 +68,7 @@ func (e *Engine) Cat(opts *CatOpts) (io.Reader, *FileInfo, error) {
 	// 6. Decrypt.
 	decResult, err := method42.Decrypt(ciphertext, kp.PrivateKey, kp.PublicKey, keyHash, accessMode)
 	if err != nil {
-		return nil, nil, fmt.Errorf("engine: decrypt %q: %w", opts.Path, err)
+		return nil, nil, fmt.Errorf("vault: decrypt %q: %w", opts.Path, err)
 	}
 
 	info := &FileInfo{

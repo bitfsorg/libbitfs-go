@@ -16,7 +16,7 @@ import (
 type PutOpts struct {
 	VaultIndex  uint32
 	LocalFile   string // local file path
-	RemotePath  string // remote path, e.g. "/docs/readme.txt"
+	RemotePath  string // remote path, v.g. "/docs/readme.txt"
 	Access      string // "free" or "private"
 	Keywords    string // optional comma-separated keywords
 	Description string // optional file description
@@ -26,21 +26,21 @@ type PutOpts struct {
 }
 
 // PutFile uploads a local file to the BitFS filesystem.
-func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
+func (v *Vault) PutFile(opts *PutOpts) (*Result, error) {
 	// Read local file.
 	plaintext, err := os.ReadFile(opts.LocalFile)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read file: %w", err)
+		return nil, fmt.Errorf("vault: read file: %w", err)
 	}
 
 	// Ensure root exists.
-	_, _, err = e.EnsureRootExists(opts.VaultIndex)
+	_, _, err = v.EnsureRootExists(opts.VaultIndex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: ensure root: %w", err)
+		return nil, fmt.Errorf("vault: ensure root: %w", err)
 	}
 
 	// Resolve parent directory.
-	parent, childName, err := e.ResolveParentNode(opts.RemotePath, opts.VaultIndex)
+	parent, childName, err := v.ResolveParentNode(opts.RemotePath, opts.VaultIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -48,16 +48,16 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 	// Check for duplicate.
 	for _, c := range parent.Children {
 		if c.Name == childName {
-			return nil, fmt.Errorf("engine: %q already exists in %q", childName, parent.Path)
+			return nil, fmt.Errorf("vault: %q already exists in %q", childName, parent.Path)
 		}
 	}
 
 	// Derive child key.
 	childIdx := parent.NextChildIdx
 	childIndices := append(append([]uint32{}, parent.ChildIndices...), childIdx)
-	childKP, err := e.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
+	childKP, err := v.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive child key: %w", err)
+		return nil, fmt.Errorf("vault: derive child key: %w", err)
 	}
 	childPubHex := hex.EncodeToString(childKP.PublicKey.Compressed())
 
@@ -76,12 +76,12 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 	// Encrypt content.
 	encResult, err := method42.Encrypt(plaintext, childKP.PrivateKey, childKP.PublicKey, accessMode)
 	if err != nil {
-		return nil, fmt.Errorf("engine: encrypt: %w", err)
+		return nil, fmt.Errorf("vault: encrypt: %w", err)
 	}
 
 	// Store encrypted content.
-	if err := e.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
-		return nil, fmt.Errorf("engine: store content: %w", err)
+	if err := v.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
+		return nil, fmt.Errorf("vault: store content: %w", err)
 	}
 
 	// Build payload.
@@ -106,7 +106,7 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 
 	payload, err := serializePayloadForChain(node, childKP.PrivateKey, childKP.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
 	// Get parent TxID and UTXO.
@@ -115,19 +115,19 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 		return nil, err
 	}
 
-	parentUTXO, parentUS, err := e.getNodeUTXOWithState(parent.PubKeyHex)
+	parentUTXO, parentUS, err := v.getNodeUTXOWithState(parent.PubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent UTXO: %w", err)
+		return nil, fmt.Errorf("vault: parent UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		parentUS.Spent = false
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(3000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(3000)
 	if err != nil {
 		parentUS.Spent = false
 		return nil, err
@@ -146,7 +146,7 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 	batch.AddCreateChild(childKP.PublicKey, parentTxID, payload, parentUTXO, parentUTXO.PrivateKey)
 
 	// Build parent update payload with new child added.
-	parentPayload, err := e.buildParentUpdatePayload(parent, &ChildState{
+	parentPayload, err := v.buildParentUpdatePayload(parent, &ChildState{
 		Name:     childName,
 		Type:     "file",
 		PubKey:   childPubHex,
@@ -154,12 +154,12 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 		Hardened: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent payload: %w", err)
+		return nil, fmt.Errorf("vault: parent payload: %w", err)
 	}
 
-	parentKP, err := e.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
+	parentKP, err := v.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive parent key: %w", err)
+		return nil, fmt.Errorf("vault: derive parent key: %w", err)
 	}
 	var parentParentTxID []byte
 	if parent.ParentTxID != "" {
@@ -175,7 +175,7 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch put tx: %w", err)
+		return nil, fmt.Errorf("vault: batch put tx: %w", err)
 	}
 
 	success = true
@@ -200,7 +200,7 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 		OnChain:      opts.OnChain,
 		Compression:  opts.Compression,
 	}
-	e.State.SetNode(childPubHex, childState)
+	v.State.SetNode(childPubHex, childState)
 
 	// Update parent.
 	parent.Children = append(parent.Children, &ChildState{
@@ -214,7 +214,7 @@ func (e *Engine) PutFile(opts *PutOpts) (*Result, error) {
 	parent.TxID = txIDHex
 
 	// Track batch UTXOs: [0]=child, [1]=parent.
-	e.TrackBatchUTXOs(result, []string{childPubHex, parent.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{childPubHex, parent.PubKeyHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,

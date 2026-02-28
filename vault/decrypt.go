@@ -17,46 +17,46 @@ type DecryptOpts struct {
 }
 
 // DecryptNode re-encrypts content from PRIVATE to FREE access.
-func (e *Engine) DecryptNode(opts *DecryptOpts) (*Result, error) {
-	nodeState := e.State.FindNodeByPath(opts.Path)
+func (v *Vault) DecryptNode(opts *DecryptOpts) (*Result, error) {
+	nodeState := v.State.FindNodeByPath(opts.Path)
 	if nodeState == nil {
-		return nil, fmt.Errorf("engine: node %q not found", opts.Path)
+		return nil, fmt.Errorf("vault: node %q not found", opts.Path)
 	}
 
 	if nodeState.Type != "file" {
-		return nil, fmt.Errorf("engine: %q is not a file", opts.Path)
+		return nil, fmt.Errorf("vault: %q is not a file", opts.Path)
 	}
 	if nodeState.Access != "private" {
-		return nil, fmt.Errorf("engine: %q is already %s", opts.Path, nodeState.Access)
+		return nil, fmt.Errorf("vault: %q is already %s", opts.Path, nodeState.Access)
 	}
 
-	kp, err := e.Wallet.DeriveNodeKey(nodeState.VaultIndex, nodeState.ChildIndices, nil)
+	kp, err := v.Wallet.DeriveNodeKey(nodeState.VaultIndex, nodeState.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive key: %w", err)
+		return nil, fmt.Errorf("vault: derive key: %w", err)
 	}
 
 	// Read current ciphertext from store.
 	keyHash := mustDecodeHex(nodeState.KeyHash)
-	ciphertext, err := e.Store.Get(keyHash)
+	ciphertext, err := v.Store.Get(keyHash)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read content: %w", err)
+		return nil, fmt.Errorf("vault: read content: %w", err)
 	}
 
 	// Re-encrypt PRIVATE -> FREE.
 	reEncResult, err := method42.ReEncrypt(ciphertext, kp.PrivateKey, kp.PublicKey, keyHash, method42.AccessPrivate, method42.AccessFree)
 	if err != nil {
-		return nil, fmt.Errorf("engine: re-encrypt: %w", err)
+		return nil, fmt.Errorf("vault: re-encrypt: %w", err)
 	}
 
 	// Store new ciphertext (key_hash changes because derivation differs).
-	if err := e.Store.Put(reEncResult.KeyHash, reEncResult.Ciphertext); err != nil {
-		return nil, fmt.Errorf("engine: store re-encrypted: %w", err)
+	if err := v.Store.Put(reEncResult.KeyHash, reEncResult.Ciphertext); err != nil {
+		return nil, fmt.Errorf("vault: store re-encrypted: %w", err)
 	}
 
 	// Delete old ciphertext only if key_hash changed (it won't when
 	// key_hash = SHA256(SHA256(plaintext)) which is access-mode-independent).
 	if !bytes.Equal(keyHash, reEncResult.KeyHash) {
-		_ = e.Store.Delete(keyHash)
+		_ = v.Store.Delete(keyHash)
 	}
 
 	// Build SelfUpdate payload.
@@ -84,7 +84,7 @@ func (e *Engine) DecryptNode(opts *DecryptOpts) (*Result, error) {
 
 	payload, err := metanet.SerializePayload(node)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
 	var parentTxID []byte
@@ -95,19 +95,19 @@ func (e *Engine) DecryptNode(opts *DecryptOpts) (*Result, error) {
 		}
 	}
 
-	nodeUTXO, nodeUS, err := e.getNodeUTXOWithState(nodeState.PubKeyHex)
+	nodeUTXO, nodeUS, err := v.getNodeUTXOWithState(nodeState.PubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: node UTXO: %w", err)
+		return nil, fmt.Errorf("vault: node UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		nodeUS.Spent = false
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(2000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(2000)
 	if err != nil {
 		nodeUS.Spent = false
 		return nil, err
@@ -129,7 +129,7 @@ func (e *Engine) DecryptNode(opts *DecryptOpts) (*Result, error) {
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch decrypt tx: %w", err)
+		return nil, fmt.Errorf("vault: batch decrypt tx: %w", err)
 	}
 
 	success = true
@@ -139,7 +139,7 @@ func (e *Engine) DecryptNode(opts *DecryptOpts) (*Result, error) {
 	nodeState.TxID = txIDHex
 	nodeState.Access = "free"
 	nodeState.KeyHash = hex.EncodeToString(reEncResult.KeyHash)
-	e.TrackBatchUTXOs(result, []string{nodeState.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{nodeState.PubKeyHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,

@@ -20,30 +20,30 @@ type CopyOpts struct {
 // Copy creates an independent node at DstPath with a new key pair and
 // re-encrypted content. Unlike a hard link, the copy has its own identity
 // on the Metanet DAG.
-func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
+func (v *Vault) Copy(opts *CopyOpts) (*Result, error) {
 	// 1. Find source node by path.
-	srcNode := e.State.FindNodeByPath(opts.SrcPath)
+	srcNode := v.State.FindNodeByPath(opts.SrcPath)
 	if srcNode == nil {
-		return nil, fmt.Errorf("engine: source %q not found", opts.SrcPath)
+		return nil, fmt.Errorf("vault: source %q not found", opts.SrcPath)
 	}
 	if srcNode.Type != "file" {
-		return nil, fmt.Errorf("engine: can only copy files, %q is a %s", opts.SrcPath, srcNode.Type)
+		return nil, fmt.Errorf("vault: can only copy files, %q is a %s", opts.SrcPath, srcNode.Type)
 	}
 
 	// 2. Read encrypted content from store using src's KeyHash.
 	srcKeyHash, err := hex.DecodeString(srcNode.KeyHash)
 	if err != nil {
-		return nil, fmt.Errorf("engine: invalid source key hash: %w", err)
+		return nil, fmt.Errorf("vault: invalid source key hash: %w", err)
 	}
-	ciphertext, err := e.Store.Get(srcKeyHash)
+	ciphertext, err := v.Store.Get(srcKeyHash)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read source content: %w", err)
+		return nil, fmt.Errorf("vault: read source content: %w", err)
 	}
 
 	// 3. Decrypt content using source node's key.
-	srcKP, err := e.Wallet.DeriveNodeKey(srcNode.VaultIndex, srcNode.ChildIndices, nil)
+	srcKP, err := v.Wallet.DeriveNodeKey(srcNode.VaultIndex, srcNode.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive source key: %w", err)
+		return nil, fmt.Errorf("vault: derive source key: %w", err)
 	}
 
 	var srcAccess method42.Access
@@ -51,24 +51,24 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 	case "private":
 		srcAccess = method42.AccessPrivate
 	case "paid":
-		return nil, fmt.Errorf("engine: %q has paid access; use daemon buyer workflow to purchase content", opts.SrcPath)
+		return nil, fmt.Errorf("vault: %q has paid access; use daemon buyer workflow to purchase content", opts.SrcPath)
 	default:
 		srcAccess = method42.AccessFree
 	}
 
 	decResult, err := method42.Decrypt(ciphertext, srcKP.PrivateKey, srcKP.PublicKey, srcKeyHash, srcAccess)
 	if err != nil {
-		return nil, fmt.Errorf("engine: decrypt source: %w", err)
+		return nil, fmt.Errorf("vault: decrypt source: %w", err)
 	}
 
 	// 4. Ensure root exists for destination vault.
-	_, _, err = e.EnsureRootExists(opts.VaultIndex)
+	_, _, err = v.EnsureRootExists(opts.VaultIndex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: ensure root: %w", err)
+		return nil, fmt.Errorf("vault: ensure root: %w", err)
 	}
 
 	// 5. Resolve destination parent.
-	dstParent, dstName, err := e.ResolveParentNode(opts.DstPath, opts.VaultIndex)
+	dstParent, dstName, err := v.ResolveParentNode(opts.DstPath, opts.VaultIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -76,28 +76,28 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 	// 6. Check for duplicate at destination.
 	for _, c := range dstParent.Children {
 		if c.Name == dstName {
-			return nil, fmt.Errorf("engine: %q already exists in %q", dstName, dstParent.Path)
+			return nil, fmt.Errorf("vault: %q already exists in %q", dstName, dstParent.Path)
 		}
 	}
 
 	// 7. Derive new child key for destination (independent from source).
 	childIdx := dstParent.NextChildIdx
 	childIndices := append(append([]uint32{}, dstParent.ChildIndices...), childIdx)
-	childKP, err := e.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
+	childKP, err := v.Wallet.DeriveNodeKey(opts.VaultIndex, childIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive child key: %w", err)
+		return nil, fmt.Errorf("vault: derive child key: %w", err)
 	}
 	childPubHex := hex.EncodeToString(childKP.PublicKey.Compressed())
 
 	// 8. Re-encrypt with new key (preserve same access mode as source).
 	encResult, err := method42.Encrypt(decResult.Plaintext, childKP.PrivateKey, childKP.PublicKey, srcAccess)
 	if err != nil {
-		return nil, fmt.Errorf("engine: encrypt copy: %w", err)
+		return nil, fmt.Errorf("vault: encrypt copy: %w", err)
 	}
 
 	// 9. Store new encrypted content.
-	if err := e.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
-		return nil, fmt.Errorf("engine: store copy: %w", err)
+	if err := v.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
+		return nil, fmt.Errorf("vault: store copy: %w", err)
 	}
 
 	// 10. Build metanet payload (CreateChild, same type/metadata as source).
@@ -131,7 +131,7 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 
 	payload, err := serializePayloadForChain(node, childKP.PrivateKey, childKP.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("engine: serialize payload: %w", err)
+		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
 	// 11. Get parent TxID and UTXO.
@@ -139,19 +139,19 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	parentUTXO, parentUS, err := e.getNodeUTXOWithState(dstParent.PubKeyHex)
+	parentUTXO, parentUS, err := v.getNodeUTXOWithState(dstParent.PubKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent UTXO: %w", err)
+		return nil, fmt.Errorf("vault: parent UTXO: %w", err)
 	}
 
-	changeAddr, changePriv, err := e.DeriveChangeAddr()
+	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		parentUS.Spent = false
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := e.AllocateFeeUTXOWithState(3000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(3000)
 	if err != nil {
 		parentUS.Spent = false
 		return nil, err
@@ -169,7 +169,7 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 	batch := tx.NewMutationBatch()
 	batch.AddCreateChild(childKP.PublicKey, parentTxID, payload, parentUTXO, parentUTXO.PrivateKey)
 
-	parentPayload, err := e.buildParentUpdatePayload(dstParent, &ChildState{
+	parentPayload, err := v.buildParentUpdatePayload(dstParent, &ChildState{
 		Name:     dstName,
 		Type:     "file",
 		PubKey:   childPubHex,
@@ -177,12 +177,12 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 		Hardened: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("engine: parent payload: %w", err)
+		return nil, fmt.Errorf("vault: parent payload: %w", err)
 	}
 
-	parentKP, err := e.Wallet.DeriveNodeKey(dstParent.VaultIndex, dstParent.ChildIndices, nil)
+	parentKP, err := v.Wallet.DeriveNodeKey(dstParent.VaultIndex, dstParent.ChildIndices, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: derive parent key: %w", err)
+		return nil, fmt.Errorf("vault: derive parent key: %w", err)
 	}
 	var parentParentTxID []byte
 	if dstParent.ParentTxID != "" {
@@ -198,7 +198,7 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 
 	txHex, result, err := buildAndSignBatch(batch)
 	if err != nil {
-		return nil, fmt.Errorf("engine: batch copy tx: %w", err)
+		return nil, fmt.Errorf("vault: batch copy tx: %w", err)
 	}
 
 	success = true
@@ -226,7 +226,7 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 	if srcNode.PricePerKB > 0 {
 		childState.PricePerKB = srcNode.PricePerKB
 	}
-	e.State.SetNode(childPubHex, childState)
+	v.State.SetNode(childPubHex, childState)
 
 	// Update destination parent.
 	dstParent.Children = append(dstParent.Children, &ChildState{
@@ -240,7 +240,7 @@ func (e *Engine) Copy(opts *CopyOpts) (*Result, error) {
 	dstParent.TxID = txIDHex
 
 	// Track batch UTXOs: [0]=child, [1]=parent.
-	e.TrackBatchUTXOs(result, []string{childPubHex, dstParent.PubKeyHex}, changePubHex)
+	v.TrackBatchUTXOs(result, []string{childPubHex, dstParent.PubKeyHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,

@@ -9,7 +9,7 @@ import (
 
 // setupLinkTestEngine sets up a test engine with a root directory and an
 // uploaded test file at /test.txt. Returns the engine ready for link tests.
-func setupLinkTestEngine(t *testing.T) *Engine {
+func setupLinkTestEngine(t *testing.T) *Vault {
 	t.Helper()
 	eng := initTestEngine(t)
 

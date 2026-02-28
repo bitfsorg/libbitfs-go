@@ -17,8 +17,8 @@ type GetOpts struct {
 }
 
 // Get downloads a file from the vault to the local filesystem.
-func (e *Engine) Get(opts *GetOpts) (*Result, error) {
-	reader, info, err := e.Cat(&CatOpts{
+func (v *Vault) Get(opts *GetOpts) (*Result, error) {
+	reader, info, err := v.Cat(&CatOpts{
 		Path: opts.RemotePath,
 	})
 	if err != nil {
@@ -34,12 +34,12 @@ func (e *Engine) Get(opts *GetOpts) (*Result, error) {
 
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return nil, fmt.Errorf("engine: create local directory: %w", err)
+		return nil, fmt.Errorf("vault: create local directory: %w", err)
 	}
 
 	f, err := os.Create(localPath)
 	if err != nil {
-		return nil, fmt.Errorf("engine: create local file: %w", err)
+		return nil, fmt.Errorf("vault: create local file: %w", err)
 	}
 
 	var retErr error
@@ -52,7 +52,7 @@ func (e *Engine) Get(opts *GetOpts) (*Result, error) {
 
 	n, err := io.Copy(f, reader)
 	if err != nil {
-		retErr = fmt.Errorf("engine: write local file: %w", err)
+		retErr = fmt.Errorf("vault: write local file: %w", err)
 		return nil, retErr
 	}
 

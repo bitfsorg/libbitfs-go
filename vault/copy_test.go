@@ -14,7 +14,7 @@ import (
 )
 
 // addFeeUTXO derives a fee key and registers a fake fee UTXO for test operations.
-func addFeeUTXO(t *testing.T, eng *Engine, amount uint64) {
+func addFeeUTXO(t *testing.T, eng *Vault, amount uint64) {
 	t.Helper()
 	idx := eng.WState.NextReceiveIndex
 	kp, err := eng.Wallet.DeriveFeeKey(wallet.ExternalChain, idx)
@@ -38,7 +38,7 @@ func addFeeUTXO(t *testing.T, eng *Engine, amount uint64) {
 
 // setupCopyTestEngine sets up a test engine with a root directory and an
 // uploaded test file at /test.txt. Returns the engine and the original plaintext.
-func setupCopyTestEngine(t *testing.T) (*Engine, []byte) {
+func setupCopyTestEngine(t *testing.T) (*Vault, []byte) {
 	t.Helper()
 	eng := initTestEngine(t)
 
