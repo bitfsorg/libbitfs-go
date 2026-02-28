@@ -1,0 +1,710 @@
+package vault
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tongxiaofeng/libbitfs-go/tx"
+	"github.com/tongxiaofeng/libbitfs-go/wallet"
+)
+
+const testPassword = "testpass"
+
+// initTestEngine creates a temporary data directory with an initialized wallet
+// and returns a ready-to-use Engine. The wallet has a "default" vault at index 0.
+func initTestEngine(t *testing.T) *Engine {
+	t.Helper()
+	dataDir := t.TempDir()
+
+	// Generate mnemonic and seed.
+	mnemonic, err := wallet.GenerateMnemonic(wallet.Mnemonic12Words)
+	if err != nil {
+		t.Fatalf("GenerateMnemonic: %v", err)
+	}
+	seed, err := wallet.SeedFromMnemonic(mnemonic, "")
+	if err != nil {
+		t.Fatalf("SeedFromMnemonic: %v", err)
+	}
+
+	// Encrypt and save wallet.
+	encrypted, err := wallet.EncryptSeed(seed, testPassword)
+	if err != nil {
+		t.Fatalf("EncryptSeed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "wallet.enc"), encrypted, 0600); err != nil {
+		t.Fatalf("write wallet.enc: %v", err)
+	}
+
+	// Create wallet state with default vault.
+	w, err := wallet.NewWallet(seed, &wallet.MainNet)
+	if err != nil {
+		t.Fatalf("NewWallet: %v", err)
+	}
+	wState := wallet.NewWalletState()
+	_, err = w.CreateVault(wState, "default")
+	if err != nil {
+		t.Fatalf("CreateVault: %v", err)
+	}
+
+	stateData, err := json.MarshalIndent(wState, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "state.json"), stateData, 0600); err != nil {
+		t.Fatalf("write state.json: %v", err)
+	}
+
+	eng, err := New(dataDir, testPassword)
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	t.Cleanup(func() { eng.Close() })
+
+	return eng
+}
+
+// --- Engine construction tests ---
+
+func TestNew_Success(t *testing.T) {
+	eng := initTestEngine(t)
+	if eng.Wallet == nil {
+		t.Error("Wallet should not be nil")
+	}
+	if eng.Store == nil {
+		t.Error("Store should not be nil")
+	}
+	if eng.State == nil {
+		t.Error("State should not be nil")
+	}
+}
+
+func TestNew_ResolverInitialized(t *testing.T) {
+	eng := initTestEngine(t)
+	assert.NotNil(t, eng.Resolver, "Resolver should be initialized")
+	assert.Equal(t, eng.Store, eng.Resolver.Store, "Resolver should use engine's store")
+}
+
+func TestNew_MissingWallet(t *testing.T) {
+	_, err := New(t.TempDir(), "pass")
+	if err == nil {
+		t.Error("New with missing wallet should fail")
+	}
+}
+
+func TestNew_WrongPassword(t *testing.T) {
+	eng := initTestEngine(t)
+	dataDir := eng.DataDir
+
+	_, err := New(dataDir, "wrongpass")
+	if err == nil {
+		t.Error("New with wrong password should fail")
+	}
+}
+
+func TestNew_EmptyPasswordError(t *testing.T) {
+	dataDir := t.TempDir()
+
+	mnemonic, _ := wallet.GenerateMnemonic(wallet.Mnemonic12Words)
+	seed, _ := wallet.SeedFromMnemonic(mnemonic, "")
+	encrypted, _ := wallet.EncryptSeed(seed, "testpass")
+	os.WriteFile(filepath.Join(dataDir, "wallet.enc"), encrypted, 0600)
+
+	w, _ := wallet.NewWallet(seed, &wallet.MainNet)
+	wState := wallet.NewWalletState()
+	w.CreateVault(wState, "default")
+	stateData, _ := json.MarshalIndent(wState, "", "  ")
+	os.WriteFile(filepath.Join(dataDir, "state.json"), stateData, 0600)
+
+	// Empty password should return an error.
+	_, err := New(dataDir, "")
+	if err == nil {
+		t.Fatal("expected error for empty password, got nil")
+	}
+}
+
+func TestClose_SavesState(t *testing.T) {
+	eng := initTestEngine(t)
+	eng.State.SetNode("testpub", &NodeState{PubKeyHex: "testpub", Path: "/test"})
+
+	if err := eng.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Verify state was persisted.
+	loaded, err := LoadLocalState(filepath.Join(eng.DataDir, "nodes.json"))
+	if err != nil {
+		t.Fatalf("LoadLocalState: %v", err)
+	}
+	if loaded.GetNode("testpub") == nil {
+		t.Error("state not persisted after Close")
+	}
+}
+
+// --- ResolveVaultIndex tests ---
+
+func TestResolveVaultIndex_EmptyUsesFirst(t *testing.T) {
+	eng := initTestEngine(t)
+
+	idx, err := eng.ResolveVaultIndex("")
+	if err != nil {
+		t.Fatalf("ResolveVaultIndex: %v", err)
+	}
+	if idx != 0 {
+		t.Errorf("vault index = %d, want 0", idx)
+	}
+}
+
+func TestResolveVaultIndex_ByName(t *testing.T) {
+	eng := initTestEngine(t)
+
+	idx, err := eng.ResolveVaultIndex("default")
+	if err != nil {
+		t.Fatalf("ResolveVaultIndex(default): %v", err)
+	}
+	if idx != 0 {
+		t.Errorf("vault index = %d, want 0", idx)
+	}
+}
+
+func TestResolveVaultIndex_NotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.ResolveVaultIndex("nonexistent")
+	if err == nil {
+		t.Error("ResolveVaultIndex(nonexistent) should fail")
+	}
+}
+
+func TestResolveVaultIndex_NoVaults(t *testing.T) {
+	eng := initTestEngine(t)
+	// Remove all vaults.
+	eng.WState.Vaults = nil
+
+	_, err := eng.ResolveVaultIndex("")
+	if err == nil {
+		t.Error("ResolveVaultIndex with no vaults should fail")
+	}
+}
+
+// --- DeriveChangeAddr tests ---
+
+func TestDeriveChangeAddr(t *testing.T) {
+	eng := initTestEngine(t)
+	startIdx := eng.WState.NextChangeIndex
+
+	hash, priv, err := eng.DeriveChangeAddr()
+	if err != nil {
+		t.Fatalf("DeriveChangeAddr: %v", err)
+	}
+	if len(hash) != 20 {
+		t.Errorf("change addr hash length = %d, want 20", len(hash))
+	}
+	if priv == nil {
+		t.Error("private key should not be nil")
+	}
+	if eng.WState.NextChangeIndex != startIdx+1 {
+		t.Error("NextChangeIndex should be incremented")
+	}
+}
+
+// --- Publish tests ---
+
+func TestPublish(t *testing.T) {
+	eng := initTestEngine(t)
+
+	result, err := eng.Publish(&PublishOpts{
+		VaultIndex: 0,
+		Domain:     "example.com",
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if !strings.Contains(result.Message, "example.com") {
+		t.Errorf("message should mention domain, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "_bitfs.example.com") {
+		t.Errorf("message should contain DNS TXT record, got: %s", result.Message)
+	}
+	if result.NodePub == "" {
+		t.Error("NodePub should not be empty")
+	}
+	if result.TxHex != "" {
+		t.Error("Publish should not produce a transaction")
+	}
+}
+
+// --- Operation error path tests ---
+
+func TestMkdir_NoFeeUTXO(t *testing.T) {
+	eng := initTestEngine(t)
+
+	// No fee UTXOs funded — should fail.
+	_, err := eng.Mkdir(&MkdirOpts{VaultIndex: 0, Path: "/"})
+	if err == nil {
+		t.Error("Mkdir without fee UTXO should fail")
+	}
+	if !strings.Contains(err.Error(), "UTXO") && !strings.Contains(err.Error(), "fund") {
+		t.Errorf("error should mention UTXO/fund, got: %v", err)
+	}
+}
+
+func TestRemove_NodeNotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/nonexistent"})
+	if err == nil {
+		t.Error("Remove nonexistent should fail")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestMove_NodeNotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.Move(&MoveOpts{VaultIndex: 0, SrcPath: "/a", DstPath: "/b"})
+	if err == nil {
+		t.Error("Move nonexistent should fail")
+	}
+}
+
+func TestMove_CrossDirectory_SourceNotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.Move(&MoveOpts{VaultIndex: 0, SrcPath: "/dir1/file", DstPath: "/dir2/file"})
+	if err == nil {
+		t.Error("Cross-directory move with missing source should fail")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestLink_TargetNotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.Link(&LinkOpts{VaultIndex: 0, TargetPath: "/nonexistent", LinkPath: "/link", Soft: false})
+	if err == nil {
+		t.Error("Link to nonexistent target should fail")
+	}
+}
+
+func TestLink_SoftTargetNotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.Link(&LinkOpts{VaultIndex: 0, TargetPath: "/nonexistent", LinkPath: "/link", Soft: true})
+	if err == nil {
+		t.Error("Soft link to nonexistent target should fail")
+	}
+}
+
+func TestEncryptNode_NotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.EncryptNode(&EncryptOpts{VaultIndex: 0, Path: "/nonexistent"})
+	if err == nil {
+		t.Error("EncryptNode nonexistent should fail")
+	}
+}
+
+func TestEncryptNode_NotFile(t *testing.T) {
+	eng := initTestEngine(t)
+	eng.State.SetNode("dirpub", &NodeState{
+		PubKeyHex: "dirpub",
+		Type:      "dir",
+		Path:      "/mydir",
+	})
+
+	_, err := eng.EncryptNode(&EncryptOpts{VaultIndex: 0, Path: "/mydir"})
+	if err == nil {
+		t.Error("EncryptNode on directory should fail")
+	}
+	if !strings.Contains(err.Error(), "not a file") {
+		t.Errorf("error should mention 'not a file', got: %v", err)
+	}
+}
+
+func TestEncryptNode_AlreadyPrivate(t *testing.T) {
+	eng := initTestEngine(t)
+	eng.State.SetNode("filepub", &NodeState{
+		PubKeyHex: "filepub",
+		Type:      "file",
+		Access:    "private",
+		Path:      "/secret.txt",
+	})
+
+	_, err := eng.EncryptNode(&EncryptOpts{VaultIndex: 0, Path: "/secret.txt"})
+	if err == nil {
+		t.Error("EncryptNode on already-private file should fail")
+	}
+	if !strings.Contains(err.Error(), "already") {
+		t.Errorf("error should mention 'already', got: %v", err)
+	}
+}
+
+func TestSell_NodeNotFound(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.Sell(&SellOpts{VaultIndex: 0, Path: "/nonexistent", PricePerKB: 100})
+	if err == nil {
+		t.Error("Sell nonexistent should fail")
+	}
+}
+
+func TestPutFile_FileNotExist(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.PutFile(&PutOpts{
+		VaultIndex: 0,
+		LocalFile:  "/nonexistent/file.txt",
+		RemotePath: "/file.txt",
+	})
+	if err == nil {
+		t.Error("PutFile with missing local file should fail")
+	}
+}
+
+// --- ResolveParentNode tests ---
+
+func TestPutFile_PreservesExtendedMetadata(t *testing.T) {
+	eng := initTestEngine(t)
+
+	testFile := filepath.Join(eng.DataDir, "meta.txt")
+	if err := os.WriteFile(testFile, []byte("metadata test"), 0644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	addFeeUTXO(t, eng, 100000)
+	_, err := eng.Mkdir(&MkdirOpts{VaultIndex: 0, Path: "/"})
+	require.NoError(t, err)
+
+	addFeeUTXO(t, eng, 100000)
+	_, err = eng.PutFile(&PutOpts{
+		VaultIndex:  0,
+		LocalFile:   testFile,
+		RemotePath:  "/meta.txt",
+		Access:      "free",
+		Keywords:    "test,metadata",
+		Description: "A test file with metadata",
+		Domain:      "example.com",
+		OnChain:     true,
+		Compression: 2,
+	})
+	require.NoError(t, err)
+
+	node := eng.State.FindNodeByPath("/meta.txt")
+	require.NotNil(t, node)
+	assert.Equal(t, "test,metadata", node.Keywords)
+	assert.Equal(t, "A test file with metadata", node.Description)
+	assert.Equal(t, "example.com", node.Domain)
+	assert.True(t, node.OnChain)
+	assert.Equal(t, int32(2), node.Compression)
+}
+
+func TestResolveParentNode_RootNotInitialized(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, _, err := eng.ResolveParentNode("/file.txt", 0)
+	if err == nil {
+		t.Error("ResolveParentNode with uninitialized root should fail")
+	}
+	if !strings.Contains(err.Error(), "root node not initialized") {
+		t.Errorf("error should mention root not initialized, got: %v", err)
+	}
+}
+
+func TestResolveParentNode_ParentNotDir(t *testing.T) {
+	eng := initTestEngine(t)
+	eng.State.SetNode("filepub", &NodeState{
+		PubKeyHex: "filepub",
+		Type:      "file",
+		Path:      "/notadir",
+	})
+
+	_, _, err := eng.ResolveParentNode("/notadir/child.txt", 0)
+	if err == nil {
+		t.Error("ResolveParentNode with file as parent should fail")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("error should mention 'not a directory', got: %v", err)
+	}
+}
+
+// --- AllocateFeeUTXO tests ---
+
+func TestAllocateFeeUTXO_NoneAvailable(t *testing.T) {
+	eng := initTestEngine(t)
+
+	_, err := eng.AllocateFeeUTXO(1000)
+	if err == nil {
+		t.Error("AllocateFeeUTXO with no UTXOs should fail")
+	}
+	if !strings.Contains(err.Error(), "fund") {
+		t.Errorf("error should mention 'fund', got: %v", err)
+	}
+}
+
+// --- TrackNewUTXOs tests ---
+
+func TestTrackNewUTXOs_NilOutputs(t *testing.T) {
+	eng := initTestEngine(t)
+
+	// Should not panic with nil outputs.
+	eng.TrackNewUTXOs(&tx.MetanetTx{}, "", "")
+	if len(eng.State.UTXOs) != 0 {
+		t.Error("no UTXOs should be added for nil outputs")
+	}
+}
+
+// --- Daemon adapter tests ---
+
+func TestWalletAdapter_GetSellerKeyPair(t *testing.T) {
+	eng := initTestEngine(t)
+	adapter := NewWalletAdapter(eng)
+
+	priv, pub, err := adapter.GetSellerKeyPair()
+	if err != nil {
+		t.Fatalf("GetSellerKeyPair: %v", err)
+	}
+	if priv == nil || pub == nil {
+		t.Error("keys should not be nil")
+	}
+}
+
+func TestStoreAdapter_GetMissing(t *testing.T) {
+	eng := initTestEngine(t)
+	adapter := NewStoreAdapter(eng)
+
+	missingHash := make([]byte, 32) // 32-byte zero hash
+	_, err := adapter.Get(missingHash)
+	if err == nil {
+		t.Error("Get missing content should fail")
+	}
+}
+
+func TestStoreAdapter_HasMissing(t *testing.T) {
+	eng := initTestEngine(t)
+	adapter := NewStoreAdapter(eng)
+
+	missingHash := make([]byte, 32) // 32-byte zero hash
+	has, err := adapter.Has(missingHash)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if has {
+		t.Error("Has should return false for missing content")
+	}
+}
+
+func TestStoreAdapter_PutAndGet(t *testing.T) {
+	eng := initTestEngine(t)
+	adapter := NewStoreAdapter(eng)
+
+	keyHash := []byte("abcdef0123456789abcdef0123456789") // 32 bytes
+	data := []byte("hello world")
+
+	if err := eng.Store.Put(keyHash, data); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	has, err := adapter.Has(keyHash)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if !has {
+		t.Error("Has should return true after Put")
+	}
+
+	got, err := adapter.Get(keyHash)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "hello world" {
+		t.Errorf("Get = %q, want 'hello world'", got)
+	}
+
+	size, err := adapter.Size(keyHash)
+	if err != nil {
+		t.Fatalf("Size: %v", err)
+	}
+	if size != int64(len(data)) {
+		t.Errorf("Size = %d, want %d", size, len(data))
+	}
+}
+
+func TestMetanetAdapter_GetNodeByPath_NotFound(t *testing.T) {
+	eng := initTestEngine(t)
+	adapter := NewMetanetAdapter(eng)
+
+	_, err := adapter.GetNodeByPath("/nonexistent")
+	if err == nil {
+		t.Error("GetNodeByPath for missing path should fail")
+	}
+}
+
+func TestMetanetAdapter_GetNodeByPath_Found(t *testing.T) {
+	eng := initTestEngine(t)
+	eng.State.SetNode("pub1", &NodeState{
+		PubKeyHex: "pub1",
+		Type:      "dir",
+		Path:      "/docs",
+		Access:    "free",
+		Children: []*ChildState{
+			{Name: "readme.txt", Type: "file", PubKey: "pub2"},
+		},
+	})
+
+	adapter := NewMetanetAdapter(eng)
+	info, err := adapter.GetNodeByPath("/docs")
+	if err != nil {
+		t.Fatalf("GetNodeByPath: %v", err)
+	}
+	if info.Type != "dir" {
+		t.Errorf("type = %q, want dir", info.Type)
+	}
+	if info.Access != "free" {
+		t.Errorf("access = %q, want free", info.Access)
+	}
+	if len(info.Children) != 1 || info.Children[0].Name != "readme.txt" {
+		t.Errorf("children = %v, want [readme.txt]", info.Children)
+	}
+}
+
+// --- Remove + parent update tests ---
+
+// TestRemove_ParentUpdateFailure_PreservesState verifies that when the parent
+// update TX build fails, the parent's Children list is NOT mutated (P1 fix).
+func TestRemove_NonEmptyDirectory_Fails(t *testing.T) {
+	eng, _ := setupCopyTestEngine(t) // root has /test.txt as child
+
+	rootPubHex, err := eng.getRootPubHex(0)
+	require.NoError(t, err)
+	root := eng.State.GetNode(rootPubHex)
+	require.NotNil(t, root)
+	require.Greater(t, len(root.Children), 0, "root should have children")
+
+	addFeeUTXO(t, eng, 100000)
+
+	_, err = eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not empty")
+}
+
+func TestRemove_EmptyDirectory_Succeeds(t *testing.T) {
+	eng := initTestEngine(t)
+
+	// Create root + empty subdirectory.
+	addFeeUTXO(t, eng, 100000)
+	_, err := eng.Mkdir(&MkdirOpts{VaultIndex: 0, Path: "/"})
+	require.NoError(t, err)
+
+	addFeeUTXO(t, eng, 100000)
+	_, err = eng.Mkdir(&MkdirOpts{VaultIndex: 0, Path: "/emptydir"})
+	require.NoError(t, err)
+
+	emptyDir := eng.State.FindNodeByPath("/emptydir")
+	require.NotNil(t, emptyDir)
+	require.Empty(t, emptyDir.Children, "/emptydir should have no children")
+
+	// Add fee UTXOs for removal (node delete + parent update).
+	addFeeUTXO(t, eng, 100000)
+	addFeeUTXO(t, eng, 100000)
+
+	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/emptydir"})
+	require.NoError(t, err)
+	assert.Contains(t, result.Message, "Removed")
+
+	// Verify /emptydir is removed from root's children.
+	rootPubHex, _ := eng.getRootPubHex(0)
+	root := eng.State.GetNode(rootPubHex)
+	for _, c := range root.Children {
+		assert.NotEqual(t, "emptydir", c.Name)
+	}
+}
+
+func TestRemove_ParentUpdateFailure_PreservesState(t *testing.T) {
+	eng, _ := setupCopyTestEngine(t) // gives us root + /test.txt
+
+	rootPubHex, err := eng.getRootPubHex(0)
+	require.NoError(t, err)
+	root := eng.State.GetNode(rootPubHex)
+	require.NotNil(t, root)
+
+	// Snapshot parent's children before remove.
+	childrenBefore := make([]string, len(root.Children))
+	for i, c := range root.Children {
+		childrenBefore[i] = c.Name
+	}
+	require.Contains(t, childrenBefore, "test.txt")
+
+	// Add fee UTXO only for the node deletion TX.
+	addFeeUTXO(t, eng, 100000)
+
+	// Mark root's node UTXO as spent so buildParentSelfUpdate fails.
+	for _, u := range eng.State.UTXOs {
+		if u.PubKeyHex == rootPubHex && u.Type == "node" && !u.Spent {
+			u.Spent = true
+		}
+	}
+
+	// Remove should still succeed (best-effort), but with a warning.
+	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/test.txt"})
+	require.NoError(t, err)
+	assert.Contains(t, result.Message, "warning")
+
+	// Parent's children list must still contain test.txt (not mutated).
+	rootAfter := eng.State.GetNode(rootPubHex)
+	childrenAfter := make([]string, len(rootAfter.Children))
+	for i, c := range rootAfter.Children {
+		childrenAfter[i] = c.Name
+	}
+	assert.Equal(t, childrenBefore, childrenAfter, "parent children should be unchanged after failed parent update")
+}
+
+func TestRemove_UpdatesParentChildList(t *testing.T) {
+	eng, _ := setupCopyTestEngine(t) // gives us root + /test.txt
+
+	// Verify the file exists in parent's children.
+	root := eng.State.FindNodeByPath("/")
+	if root == nil {
+		// root might be stored by pubkey only
+		rootPubHex, _ := eng.getRootPubHex(0)
+		root = eng.State.GetNode(rootPubHex)
+	}
+	require.NotNil(t, root)
+
+	found := false
+	for _, c := range root.Children {
+		if c.Name == "test.txt" {
+			found = true
+		}
+	}
+	require.True(t, found, "test.txt should be in root children before remove")
+
+	// Add fee UTXOs for both txs (node delete + parent update).
+	addFeeUTXO(t, eng, 100000)
+	addFeeUTXO(t, eng, 100000)
+
+	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/test.txt"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.TxHex)
+	assert.Contains(t, result.Message, "Removed")
+
+	// Result should contain 2 txs (newline-separated).
+	txParts := strings.Split(result.TxHex, "\n")
+	assert.Len(t, txParts, 2, "Remove should produce 2 txs: node delete + parent update")
+
+	// Parent's children list should no longer contain test.txt.
+	rootPubHex, _ := eng.getRootPubHex(0)
+	rootAfter := eng.State.GetNode(rootPubHex)
+	for _, c := range rootAfter.Children {
+		assert.NotEqual(t, "test.txt", c.Name, "test.txt should be removed from parent children")
+	}
+}
