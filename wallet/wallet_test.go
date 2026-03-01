@@ -709,25 +709,22 @@ func TestRenameVault_NonexistentOldName(t *testing.T) {
 func TestDeriveFeeKey_InvalidChain(t *testing.T) {
 	w := newTestWallet(t)
 
-	// chain=2 is beyond ExternalChain(0)/InternalChain(1).
-	// The implementation does not validate chain, so it should still derive a key
-	// (BIP32 allows any non-hardened child index). Verify it produces a valid key
-	// that differs from chain=0 and chain=1.
-	kp2, err := w.DeriveFeeKey(2, 0)
-	require.NoError(t, err)
-	assert.NotNil(t, kp2.PublicKey)
-	assert.Equal(t, "m/44'/236'/0'/2/0", kp2.Path)
+	// chain=2 is invalid — only 0 (external) and 1 (internal) are allowed per BIP44.
+	_, err := w.DeriveFeeKey(2, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid chain 2")
 
-	// Verify it differs from external and internal chains.
+	// Valid chains still work.
 	kpExt, err := w.DeriveFeeKey(ExternalChain, 0)
 	require.NoError(t, err)
+	assert.NotNil(t, kpExt.PublicKey)
+
 	kpInt, err := w.DeriveFeeKey(InternalChain, 0)
 	require.NoError(t, err)
+	assert.NotNil(t, kpInt.PublicKey)
 
-	assert.NotEqual(t, kp2.PublicKey.Compressed(), kpExt.PublicKey.Compressed(),
-		"chain=2 should differ from ExternalChain")
-	assert.NotEqual(t, kp2.PublicKey.Compressed(), kpInt.PublicKey.Compressed(),
-		"chain=2 should differ from InternalChain")
+	assert.NotEqual(t, kpExt.PublicKey.Compressed(), kpInt.PublicKey.Compressed(),
+		"external and internal chains should produce different keys")
 }
 
 // GAP 10: DeriveNodeKey with mismatched hardened array length (partial).

@@ -104,6 +104,9 @@ func (w *Wallet) deriveAccount(account uint32) (*bip32.ExtendedKey, error) {
 //	index: address index
 //	Path: m/44'/236'/0'/chain/index
 func (w *Wallet) DeriveFeeKey(chain, index uint32) (*KeyPair, error) {
+	if chain > 1 {
+		return nil, fmt.Errorf("%w: invalid chain %d (must be 0 or 1)", ErrDerivationFailed, chain)
+	}
 	accountKey, err := w.deriveAccount(FeeAccount)
 	if err != nil {
 		return nil, err
