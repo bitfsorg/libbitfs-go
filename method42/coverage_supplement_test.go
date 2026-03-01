@@ -3,6 +3,8 @@ package method42
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
+	"math/big"
 	"testing"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -262,4 +264,143 @@ func TestFullRoundTrip_AllModes(t *testing.T) {
 		assert.Equal(t, plaintext, dec.Plaintext, "mode=%v", mode)
 		assert.Equal(t, enc.KeyHash, dec.KeyHash, "mode=%v keyHash mismatch", mode)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// R01-M1 — xorBytes panics on mismatched lengths
+// ---------------------------------------------------------------------------
+
+func TestXorBytes_MismatchedLengthsPanics(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"method42: xorBytes called with mismatched lengths",
+		func() { xorBytes([]byte{0x01, 0x02}, []byte{0x03}) },
+		"xorBytes should panic when input lengths differ",
+	)
+}
+
+func TestXorBytes_EqualLengths(t *testing.T) {
+	a := []byte{0xff, 0x00, 0xaa}
+	b := []byte{0x0f, 0xf0, 0x55}
+	result := xorBytes(a, b)
+	assert.Equal(t, []byte{0xf0, 0xf0, 0xff}, result)
+}
+
+func TestXorBytes_EmptySlices(t *testing.T) {
+	result := xorBytes([]byte{}, []byte{})
+	assert.Empty(t, result)
+}
+
+// ---------------------------------------------------------------------------
+// R01-M2 — ComputeCapsuleHash returns nil for invalid fileTxID length
+// ---------------------------------------------------------------------------
+
+func TestComputeCapsuleHash_InvalidFileTxIDLength(t *testing.T) {
+	capsule := bytes.Repeat([]byte{0xab}, 32)
+
+	tests := []struct {
+		name     string
+		fileTxID []byte
+	}{
+		{"nil", nil},
+		{"empty", []byte{}},
+		{"too short (16 bytes)", bytes.Repeat([]byte{0x01}, 16)},
+		{"too long (33 bytes)", bytes.Repeat([]byte{0x01}, 33)},
+		{"one byte", []byte{0x42}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ComputeCapsuleHash(tt.fileTxID, capsule)
+			assert.Nil(t, result, "ComputeCapsuleHash should return nil for fileTxID of length %d", len(tt.fileTxID))
+		})
+	}
+}
+
+func TestComputeCapsuleHash_ValidFileTxID(t *testing.T) {
+	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
+	capsule := bytes.Repeat([]byte{0xab}, 32)
+	result := ComputeCapsuleHash(fileTxID, capsule)
+	assert.NotNil(t, result)
+	assert.Len(t, result, 32)
+}
+
+// ---------------------------------------------------------------------------
+// R01-M3 — ComputeCapsuleWithNonce rejects invalid keyHash length
+// ---------------------------------------------------------------------------
+
+func TestComputeCapsuleWithNonce_InvalidKeyHashLength(t *testing.T) {
+	nodePriv, nodePub := genKP(t)
+	_, buyerPub := genKP(t)
+
+	tests := []struct {
+		name    string
+		keyHash []byte
+	}{
+		{"nil", nil},
+		{"empty", []byte{}},
+		{"16 bytes", bytes.Repeat([]byte{0x01}, 16)},
+		{"33 bytes", bytes.Repeat([]byte{0x01}, 33)},
+		{"64 bytes", bytes.Repeat([]byte{0x01}, 64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ComputeCapsuleWithNonce(nodePriv, nodePub, buyerPub, tt.keyHash, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "keyHash must be 32 bytes")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R01-M4 — RabinSign bounded iteration (structural test)
+// ---------------------------------------------------------------------------
+
+func TestRabinSign_MaxIterationsConstant(t *testing.T) {
+	// Verify the constant exists and has a reasonable value.
+	assert.Equal(t, 1_000_000, maxRabinPaddingIterations,
+		"maxRabinPaddingIterations should be 1,000,000")
+}
+
+// ---------------------------------------------------------------------------
+// R01-M5 — GenerateRabinKey rejects p == q
+// ---------------------------------------------------------------------------
+
+func TestGenerateRabinKey_ProducesDistinctPrimes(t *testing.T) {
+	// Run multiple times to increase confidence (the p == q path is
+	// astronomically unlikely with real crypto/rand, but we verify the
+	// structural property that p != q holds).
+	for i := 0; i < 5; i++ {
+		key, err := GenerateRabinKey(512)
+		require.NoError(t, err)
+		assert.NotEqual(t, 0, key.P.Cmp(key.Q),
+			"generated primes p and q must differ (iteration %d)", i)
+		// Verify n = p * q
+		expected := new(big.Int).Mul(key.P, key.Q)
+		assert.Equal(t, 0, expected.Cmp(key.N))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R01-M6 — aesGCMEncrypt does NOT wrap ErrDecryptionFailed
+// ---------------------------------------------------------------------------
+
+func TestAesGCMEncrypt_ErrorNotDecryptionFailed(t *testing.T) {
+	// Trigger an error in aesGCMEncrypt by using an invalid key length.
+	_, err := aesGCMEncrypt([]byte("data"), make([]byte, 15), nil)
+	require.Error(t, err)
+
+	// The error should NOT wrap ErrDecryptionFailed (that was the M6 bug).
+	assert.False(t, errors.Is(err, ErrDecryptionFailed),
+		"aesGCMEncrypt error should not wrap ErrDecryptionFailed; got: %v", err)
+
+	// It should contain the correct message.
+	assert.Contains(t, err.Error(), "AES cipher creation failed")
+}
+
+func TestAesGCMDecrypt_ErrorIsDecryptionFailed(t *testing.T) {
+	// In contrast, aesGCMDecrypt errors SHOULD wrap ErrDecryptionFailed.
+	ct := make([]byte, MinCiphertextLen+1)
+	_, err := aesGCMDecrypt(ct, make([]byte, 15), nil)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrDecryptionFailed),
+		"aesGCMDecrypt error should wrap ErrDecryptionFailed; got: %v", err)
 }
