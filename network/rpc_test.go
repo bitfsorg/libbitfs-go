@@ -95,6 +95,21 @@ func TestRPCClientSequentialIDs(t *testing.T) {
 	assert.Equal(t, int64(3), ids[2])
 }
 
+func TestRPCClientAuthError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("401 Unauthorized"))
+	}))
+	defer server.Close()
+
+	client := NewRPCClient(RPCConfig{URL: server.URL, User: "wrong", Password: "creds"})
+	var result int
+	err := client.Call(context.Background(), "getblockcount", nil, &result)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAuthFailed)
+	assert.Contains(t, err.Error(), "401")
+}
+
 func TestRPCClientNilResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest

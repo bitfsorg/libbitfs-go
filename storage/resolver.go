@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -65,6 +66,12 @@ func (r *ContentResolver) Fetch(keyHash []byte) ([]byte, error) {
 	for _, ep := range r.Endpoints {
 		data, err := r.fetchFromEndpoint(client, ep, hashHex)
 		if err == nil {
+			// Verify content hash before trusting remote data.
+			actualHash := sha256.Sum256(data)
+			if len(keyHash) == KeyHashSize && !bytesEqual(actualHash[:], keyHash) {
+				// Hash mismatch — skip this endpoint and try the next one.
+				continue
+			}
 			// Cache locally for future access.
 			if r.Store != nil {
 				_ = r.Store.Put(keyHash, data) // best-effort cache
@@ -101,4 +108,17 @@ func (r *ContentResolver) fetchFromEndpoint(client *http.Client, baseURL, hashHe
 	}
 
 	return data, nil
+}
+
+// bytesEqual returns true if a and b are equal length and contents.
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

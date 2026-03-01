@@ -31,3 +31,9 @@ func TestCheckCLTVAccess(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckCLTVAccess_NilNode(t *testing.T) {
+	// R03-M2: nil node must not panic and should return CLTVDenied.
+	result := CheckCLTVAccess(nil, 100)
+	assert.Equal(t, CLTVDenied, result)
+}

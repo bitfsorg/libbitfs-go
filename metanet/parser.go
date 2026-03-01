@@ -62,6 +62,55 @@ const (
 	tagFileMode         = 0x26 // uint32, git file mode
 )
 
+// MaxPayloadSize is the maximum allowed total payload size for a metanet TLV
+// deserialization (64 MB). Payloads exceeding this are rejected to prevent
+// memory exhaustion from malicious or corrupted data.
+const MaxPayloadSize = 64 << 20 // 64 MB
+
+// validateTLVFieldLength checks that known fixed-size TLV fields have the
+// correct length. Returns an error for size mismatches; returns nil for
+// variable-length or unknown tags.
+func validateTLVFieldLength(tag byte, length int) error {
+	switch tag {
+	// uint32 fields: must be exactly 4 bytes
+	case tagVersion, tagType, tagOp, tagAccess, tagLinkType,
+		tagIndex, tagNextChildIndex, tagEncrypted, tagOnChain,
+		tagCompression, tagCltvHeight, tagRevenueShare,
+		tagChunkIndex, tagTotalChunks, tagRegistryVout, tagFileMode:
+		if length != 4 {
+			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 4 bytes, got %d", tag, length)
+		}
+	// uint64 fields: must be exactly 8 bytes
+	case tagFileSize, tagPricePerKB, tagTimestamp:
+		if length != 8 {
+			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 8 bytes, got %d", tag, length)
+		}
+	// 32-byte hash/txid fields
+	case tagMerkleRoot, tagRecombinationHash, tagRegistryTxID,
+		tagTreeRootTxID, tagKeyHash, tagContentTxID, tagParentAnchorTxID:
+		if length != 32 {
+			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 32 bytes, got %d", tag, length)
+		}
+	// 33-byte compressed pubkey fields
+	case tagParent, tagVersionLog, tagShareList, tagTreeRootPNode:
+		if length != 33 {
+			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 33 bytes, got %d", tag, length)
+		}
+	// 20-byte git commit SHA
+	case tagGitCommitSHA:
+		if length != 20 {
+			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 20 bytes, got %d", tag, length)
+		}
+	// 37-byte ISO config
+	case tagISOConfig:
+		if length != 37 {
+			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 37 bytes, got %d", tag, length)
+		}
+	// Variable-length or unknown tags: no validation
+	}
+	return nil
+}
+
 // ParseNode parses OP_RETURN push data (as produced by tx.ParseOPReturnData)
 // into a Metanet Node. The pushes should be the 4-element array:
 // [MetaFlag, P_node, TxID_parent, Payload].
@@ -415,14 +464,18 @@ func deserializeISOConfig(data []byte) (*ISOConfig, error) {
 	return iso, nil
 }
 
+// serializeChildEntry serializes a ChildEntry into bytes.
+// Thread safety: this function allocates fresh byte slices for all fields
+// and does not share or retain any buffers. It is safe for concurrent use
+// and produces independent output for each call.
 func serializeChildEntry(entry *ChildEntry) []byte {
 	// index(4) + nameLen(2) + name + type(4) + pubkeyLen(1) + pubkey + hardened(1)
 	var buf []byte
 
-	// Index
-	b := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b, entry.Index)
-	buf = append(buf, b...)
+	// Index — fresh 4-byte buffer
+	idxBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(idxBuf, entry.Index)
+	buf = append(buf, idxBuf...)
 
 	// Name (length-prefixed)
 	nameBytes := []byte(entry.Name)
@@ -431,9 +484,10 @@ func serializeChildEntry(entry *ChildEntry) []byte {
 	buf = append(buf, lenBuf...)
 	buf = append(buf, nameBytes...)
 
-	// Type
-	binary.LittleEndian.PutUint32(b, uint32(entry.Type))
-	buf = append(buf, b...)
+	// Type — fresh 4-byte buffer (not reusing idxBuf)
+	typBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(typBuf, uint32(entry.Type))
+	buf = append(buf, typBuf...)
 
 	// PubKey (length-prefixed with 1 byte)
 	buf = append(buf, byte(len(entry.PubKey)))
@@ -467,6 +521,10 @@ func deserializePayload(data []byte, node *Node) error {
 		}
 		offset += n
 
+		if length > uint64(MaxPayloadSize) {
+			return fmt.Errorf("metanet: payload too large: %d bytes (max %d) for tag 0x%02x", length, MaxPayloadSize, tag)
+		}
+
 		if length > uint64(len(data)-offset) {
 			return fmt.Errorf("truncated value for tag 0x%02x at offset %d", tag, offset)
 		}
@@ -475,54 +533,41 @@ func deserializePayload(data []byte, node *Node) error {
 		value := data[offset : offset+intLen]
 		offset += intLen
 
+		// Strict length validation for fixed-size TLV fields.
+		if err := validateTLVFieldLength(tag, intLen); err != nil {
+			return err
+		}
+
 		switch tag {
 		case tagVersion:
-			if length == 4 {
-				node.Version = binary.LittleEndian.Uint32(value)
-			}
+			node.Version = binary.LittleEndian.Uint32(value)
 		case tagType:
-			if length == 4 {
-				node.Type = NodeType(binary.LittleEndian.Uint32(value))
-			}
+			node.Type = NodeType(binary.LittleEndian.Uint32(value))
 		case tagOp:
-			if length == 4 {
-				node.Op = OpType(binary.LittleEndian.Uint32(value))
-			}
+			node.Op = OpType(binary.LittleEndian.Uint32(value))
 		case tagMimeType:
 			node.MimeType = string(value)
 		case tagFileSize:
-			if length == 8 {
-				node.FileSize = binary.LittleEndian.Uint64(value)
-			}
+			node.FileSize = binary.LittleEndian.Uint64(value)
 		case tagKeyHash:
 			node.KeyHash = make([]byte, length)
 			copy(node.KeyHash, value)
 		case tagAccess:
-			if length == 4 {
-				node.Access = AccessLevel(binary.LittleEndian.Uint32(value))
-			}
+			node.Access = AccessLevel(binary.LittleEndian.Uint32(value))
 		case tagPricePerKB:
-			if length == 8 {
-				node.PricePerKB = binary.LittleEndian.Uint64(value)
-			}
+			node.PricePerKB = binary.LittleEndian.Uint64(value)
 		case tagLinkTarget:
 			node.LinkTarget = make([]byte, length)
 			copy(node.LinkTarget, value)
 		case tagLinkType:
-			if length == 4 {
-				node.LinkType = LinkType(binary.LittleEndian.Uint32(value))
-			}
+			node.LinkType = LinkType(binary.LittleEndian.Uint32(value))
 		case tagTimestamp:
-			if length == 8 {
-				node.Timestamp = binary.LittleEndian.Uint64(value)
-			}
+			node.Timestamp = binary.LittleEndian.Uint64(value)
 		case tagParent:
 			node.Parent = make([]byte, length)
 			copy(node.Parent, value)
 		case tagIndex:
-			if length == 4 {
-				node.Index = binary.LittleEndian.Uint32(value)
-			}
+			node.Index = binary.LittleEndian.Uint32(value)
 		case tagChildEntry:
 			entry, err := deserializeChildEntry(value)
 			if err != nil {
@@ -530,9 +575,7 @@ func deserializePayload(data []byte, node *Node) error {
 			}
 			node.Children = append(node.Children, *entry)
 		case tagNextChildIndex:
-			if length == 4 {
-				node.NextChildIndex = binary.LittleEndian.Uint32(value)
-			}
+			node.NextChildIndex = binary.LittleEndian.Uint32(value)
 		case tagDomain:
 			node.Domain = string(value)
 		case tagKeywords:
@@ -540,29 +583,19 @@ func deserializePayload(data []byte, node *Node) error {
 		case tagDescription:
 			node.Description = string(value)
 		case tagEncrypted:
-			if length == 4 {
-				node.Encrypted = binary.LittleEndian.Uint32(value) != 0
-			}
+			node.Encrypted = binary.LittleEndian.Uint32(value) != 0
 		case tagOnChain:
-			if length == 4 {
-				node.OnChain = binary.LittleEndian.Uint32(value) != 0
-			}
+			node.OnChain = binary.LittleEndian.Uint32(value) != 0
 		case tagContentTxID:
 			contentTxID := make([]byte, length)
 			copy(contentTxID, value)
 			node.ContentTxIDs = append(node.ContentTxIDs, contentTxID)
 		case tagCompression:
-			if length == 4 {
-				node.Compression = int32(binary.LittleEndian.Uint32(value))
-			}
+			node.Compression = int32(binary.LittleEndian.Uint32(value))
 		case tagCltvHeight:
-			if length == 4 {
-				node.CltvHeight = binary.LittleEndian.Uint32(value)
-			}
+			node.CltvHeight = binary.LittleEndian.Uint32(value)
 		case tagRevenueShare:
-			if length == 4 {
-				node.RevenueShare = binary.LittleEndian.Uint32(value)
-			}
+			node.RevenueShare = binary.LittleEndian.Uint32(value)
 		case tagNetworkName:
 			node.NetworkName = string(value)
 		case tagMerkleRoot:
@@ -586,13 +619,9 @@ func deserializePayload(data []byte, node *Node) error {
 			node.ShareList = make([]byte, length)
 			copy(node.ShareList, value)
 		case tagChunkIndex:
-			if length == 4 {
-				node.ChunkIndex = binary.LittleEndian.Uint32(value)
-			}
+			node.ChunkIndex = binary.LittleEndian.Uint32(value)
 		case tagTotalChunks:
-			if length == 4 {
-				node.TotalChunks = binary.LittleEndian.Uint32(value)
-			}
+			node.TotalChunks = binary.LittleEndian.Uint32(value)
 		case tagRecombinationHash:
 			node.RecombinationHash = make([]byte, length)
 			copy(node.RecombinationHash, value)
@@ -606,9 +635,7 @@ func deserializePayload(data []byte, node *Node) error {
 			node.RegistryTxID = make([]byte, length)
 			copy(node.RegistryTxID, value)
 		case tagRegistryVout:
-			if length == 4 {
-				node.RegistryVout = binary.LittleEndian.Uint32(value)
-			}
+			node.RegistryVout = binary.LittleEndian.Uint32(value)
 		case tagISOConfig:
 			iso, err := deserializeISOConfig(value)
 			if err != nil {
@@ -638,9 +665,7 @@ func deserializePayload(data []byte, node *Node) error {
 			node.GitCommitSHA = make([]byte, length)
 			copy(node.GitCommitSHA, value)
 		case tagFileMode:
-			if length == 4 {
-				node.FileMode = binary.LittleEndian.Uint32(value)
-			}
+			node.FileMode = binary.LittleEndian.Uint32(value)
 
 		default:
 			// Skip unknown tags for forward compatibility

@@ -15,6 +15,16 @@ import (
 
 // --- Helper types and functions ---
 
+// containsAny returns true if s contains any of the given substrings.
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // mockNodeStore is a simple in-memory NodeStore for testing.
 type mockNodeStore struct {
 	byPubKey map[string]*Node
@@ -1329,7 +1339,10 @@ func TestDeserializePayload_RejectsHugeTLVLength(t *testing.T) {
 	node := &Node{}
 	err := deserializePayload(buf, node)
 	assert.Error(t, err, "should reject TLV length exceeding buffer")
-	assert.Contains(t, err.Error(), "truncated")
+	// The error may be "payload too large" (MaxPayloadSize check) or
+	// "truncated" (buffer bounds check), depending on which fires first.
+	assert.True(t, containsAny(err.Error(), "truncated", "payload too large"),
+		"expected error containing 'truncated' or 'payload too large', got: %s", err.Error())
 }
 
 // --- Integration-style test: full workflow ---

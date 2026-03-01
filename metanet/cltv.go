@@ -11,8 +11,13 @@ const (
 )
 
 // CheckCLTVAccess checks if content is accessible at the given block height.
-// Returns CLTVAllowed if cltv_height is 0 (no restriction) or currentHeight >= cltv_height.
+// Returns CLTVAllowed if node is nil, cltv_height is 0 (no restriction), or
+// currentHeight >= cltv_height. A nil node returns CLTVDenied with an error
+// via CheckCLTVAccessErr; this function returns CLTVDenied for nil to avoid panic.
 func CheckCLTVAccess(node *Node, currentHeight uint32) CLTVResult {
+	if node == nil {
+		return CLTVDenied
+	}
 	if node.CltvHeight == 0 {
 		return CLTVAllowed
 	}

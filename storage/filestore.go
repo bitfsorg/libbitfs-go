@@ -84,9 +84,26 @@ func (fs *FileStore) Put(keyHash []byte, ciphertext []byte) error {
 
 	path := fs.filePath(keyHash)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, ciphertext, 0600); err != nil {
+
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
 		return fmt.Errorf("%w: %w", ErrIOFailure, err)
 	}
+	if _, err := f.Write(ciphertext); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%w: %w", ErrIOFailure, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("storage: fsync: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%w: %w", ErrIOFailure, err)
+	}
+
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp) // best-effort cleanup
 		return fmt.Errorf("%w: %w", ErrIOFailure, err)
@@ -179,7 +196,10 @@ func (fs *FileStore) Size(keyHash []byte) (int64, error) {
 	return info.Size(), nil
 }
 
-// List returns all stored key hashes by scanning the shard directories.
+// List returns content hashes in storage. Results represent a snapshot;
+// concurrent external modifications may not be reflected. The internal
+// RLock prevents races with other FileStore methods but cannot guard
+// against out-of-process filesystem changes.
 func (fs *FileStore) List() ([][]byte, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()

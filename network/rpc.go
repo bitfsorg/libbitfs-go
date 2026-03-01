@@ -101,13 +101,18 @@ func (c *RPCClient) Call(ctx context.Context, method string, params []interface{
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("%w: HTTP 401 unauthorized", ErrAuthFailed)
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("%w: HTTP %d: %s", ErrConnectionFailed, resp.StatusCode, string(respBody))
 	}
 
+	const maxRPCResponseSize = 10 << 20 // 10 MB
 	var rpcResp rpcResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRPCResponseSize)).Decode(&rpcResp); err != nil {
 		return fmt.Errorf("%w: decode response: %w", ErrInvalidResponse, err)
 	}
 
