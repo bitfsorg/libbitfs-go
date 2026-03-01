@@ -50,7 +50,8 @@ func TestNewInvoice(t *testing.T) {
 	capsuleHash := make([]byte, 32)
 	capsuleHash[0] = 0xab
 
-	inv := NewInvoice(50, 2048, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", capsuleHash, 3600)
+	inv, err := NewInvoice(50, 2048, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", capsuleHash, 3600)
+	require.NoError(t, err)
 
 	assert.NotEmpty(t, inv.ID)
 	assert.Equal(t, uint64(100), inv.Price) // 50 * 2048 / 1024 = 100
@@ -72,8 +73,10 @@ func TestInvoice_IsExpired(t *testing.T) {
 
 func TestNewInvoice_UniqueIDs(t *testing.T) {
 	capsuleHash := make([]byte, 32)
-	inv1 := NewInvoice(10, 1024, "addr1", capsuleHash, 60)
-	inv2 := NewInvoice(10, 1024, "addr1", capsuleHash, 60)
+	inv1, err := NewInvoice(10, 1024, "addr1", capsuleHash, 60)
+	require.NoError(t, err)
+	inv2, err := NewInvoice(10, 1024, "addr1", capsuleHash, 60)
+	require.NoError(t, err)
 	assert.NotEqual(t, inv1.ID, inv2.ID)
 }
 

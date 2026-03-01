@@ -147,13 +147,15 @@ func TestBuildHTLC_MultisigRefundPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewInvoice_ZeroPrice(t *testing.T) {
-	inv := NewInvoice(0, 1024, "addr", make([]byte, 32), 60)
+	inv, err := NewInvoice(0, 1024, "addr", make([]byte, 32), 60)
+	require.NoError(t, err)
 	assert.Equal(t, uint64(0), inv.Price)
 	assert.NotEmpty(t, inv.ID)
 }
 
 func TestNewInvoice_ZeroTTL(t *testing.T) {
-	inv := NewInvoice(100, 1024, "addr", make([]byte, 32), 0)
+	inv, err := NewInvoice(100, 1024, "addr", make([]byte, 32), 0)
+	require.NoError(t, err)
 	// With 0 TTL, expiry should be approximately now
 	assert.InDelta(t, time.Now().Unix(), inv.Expiry, 2)
 }

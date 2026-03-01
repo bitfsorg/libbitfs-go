@@ -27,6 +27,10 @@ type PaymentHeaders struct {
 // SetPaymentHeaders sets x402 headers on an HTTP response.
 // Also sets the status code to 402 Payment Required.
 func SetPaymentHeaders(w http.ResponseWriter, headers *PaymentHeaders) {
+	if headers == nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set(HeaderPrice, strconv.FormatUint(headers.Price, 10))
 	w.Header().Set(HeaderPricePerKB, strconv.FormatUint(headers.PricePerKB, 10))
 	w.Header().Set(HeaderFileSize, strconv.FormatUint(headers.FileSize, 10))

@@ -608,8 +608,8 @@ func TestHTLCRoundTrip(t *testing.T) {
 	// --- Create invoice ---
 	pricePerKB := uint64(50000)
 	fileSize := uint64(len(plaintext))
-	invoice := NewInvoice(pricePerKB, fileSize, "1SellerAddr", capsuleHash, 3600)
-	require.NotNil(t, invoice)
+	invoice, err := NewInvoice(pricePerKB, fileSize, "1SellerAddr", capsuleHash, 3600)
+	require.NoError(t, err)
 
 	// --- Buyer side: build HTLC funding tx ---
 	mockTxID := sha256.Sum256([]byte("buyer-utxo-txid"))

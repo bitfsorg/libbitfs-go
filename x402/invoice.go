@@ -55,8 +55,11 @@ func CalculatePrice(pricePerKB, fileSize uint64) uint64 {
 // paymentAddr is the BSV address where payment should be sent.
 // capsuleHash is SHA256(capsule) for the HTLC hash lock (32 bytes).
 // ttlSeconds is the invoice time-to-live in seconds.
-func NewInvoice(pricePerKB, fileSize uint64, paymentAddr string, capsuleHash []byte, ttlSeconds int64) *Invoice {
-	invoiceID := generateInvoiceID()
+func NewInvoice(pricePerKB, fileSize uint64, paymentAddr string, capsuleHash []byte, ttlSeconds int64) (*Invoice, error) {
+	invoiceID, err := generateInvoiceID()
+	if err != nil {
+		return nil, err
+	}
 	totalPrice := CalculatePrice(pricePerKB, fileSize)
 	now := time.Now()
 
@@ -68,7 +71,7 @@ func NewInvoice(pricePerKB, fileSize uint64, paymentAddr string, capsuleHash []b
 		PaymentAddr: paymentAddr,
 		Expiry:      now.Unix() + ttlSeconds,
 		CapsuleHash: capsuleHash,
-	}
+	}, nil
 }
 
 // IsExpired returns true if the invoice has passed its expiry time.
@@ -77,11 +80,11 @@ func (inv *Invoice) IsExpired() bool {
 }
 
 // generateInvoiceID creates a random 16-byte hex-encoded invoice ID.
-func generateInvoiceID() string {
+// Returns error if CSPRNG fails (never falls back to predictable values).
+func generateInvoiceID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based ID
-		return fmt.Sprintf("inv-%d", time.Now().UnixNano())
+		return "", fmt.Errorf("x402: CSPRNG failure: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

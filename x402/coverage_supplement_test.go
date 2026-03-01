@@ -72,7 +72,8 @@ func TestBuildHTLC_ScriptContainsOpcodes(t *testing.T) {
 func TestGenerateInvoiceID_Uniqueness(t *testing.T) {
 	ids := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		id := generateInvoiceID()
+		id, err := generateInvoiceID()
+		require.NoError(t, err)
 		assert.Len(t, id, 32) // 16 bytes hex-encoded
 		assert.False(t, ids[id], "duplicate invoice ID")
 		ids[id] = true
