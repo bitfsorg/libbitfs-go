@@ -106,7 +106,7 @@ func validateTLVFieldLength(tag byte, length int) error {
 		if length != 37 {
 			return fmt.Errorf("metanet: invalid field length for tag 0x%02x: expected 37 bytes, got %d", tag, length)
 		}
-	// Variable-length or unknown tags: no validation
+		// Variable-length or unknown tags: no validation
 	}
 	return nil
 }
