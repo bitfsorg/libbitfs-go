@@ -1,6 +1,8 @@
 package x402
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -169,4 +171,19 @@ func TestInvoice_IsExpired_ExactlyNow(t *testing.T) {
 	// (condition is >, not >=)
 	inv := &Invoice{Expiry: time.Now().Unix()}
 	assert.False(t, inv.IsExpired())
+}
+
+// ---------------------------------------------------------------------------
+// SetPaymentHeaders — nil guard (R02-M2)
+// ---------------------------------------------------------------------------
+
+func TestSetPaymentHeaders_NilHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	SetPaymentHeaders(w, nil)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal error")
+	// No x402 headers should be set.
+	assert.Empty(t, w.Header().Get(HeaderPrice))
+	assert.Empty(t, w.Header().Get(HeaderInvoiceID))
 }
