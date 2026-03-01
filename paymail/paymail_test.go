@@ -396,8 +396,8 @@ func setupPaymailServer(t *testing.T, pubKeyHex string) *httptest.Server {
 		resp := map[string]interface{}{
 			"bsvalias": "1.0",
 			"capabilities": map[string]interface{}{
-				"pki":          "{server}/api/v1/bsvalias/pki/{alias}@{domain.tld}",
-				"f12f968c92d6": "{server}/api/v1/bsvalias/public-profile/{alias}@{domain.tld}",
+				"pki":          "https://example.com/api/v1/bsvalias/pki/{alias}@{domain.tld}",
+				"f12f968c92d6": "https://example.com/api/v1/bsvalias/public-profile/{alias}@{domain.tld}",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -836,7 +836,7 @@ func TestResolvePKI_PKIEndpointNon200(t *testing.T) {
 		resp := map[string]interface{}{
 			"bsvalias": "1.0",
 			"capabilities": map[string]interface{}{
-				"pki": "{server}/api/v1/bsvalias/pki/{alias}@{domain.tld}",
+				"pki": "https://example.com/api/v1/bsvalias/pki/{alias}@{domain.tld}",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -861,7 +861,7 @@ func TestResolvePKI_PKIEndpointInvalidJSON(t *testing.T) {
 		resp := map[string]interface{}{
 			"bsvalias": "1.0",
 			"capabilities": map[string]interface{}{
-				"pki": "{server}/api/v1/bsvalias/pki/{alias}@{domain.tld}",
+				"pki": "https://example.com/api/v1/bsvalias/pki/{alias}@{domain.tld}",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")

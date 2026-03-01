@@ -59,7 +59,7 @@ func (r *ContentResolver) Fetch(keyHash []byte) ([]byte, error) {
 	hashHex := hex.EncodeToString(keyHash)
 	client := r.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
 	for _, ep := range r.Endpoints {

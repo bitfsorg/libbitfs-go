@@ -22,14 +22,14 @@ func genKP(t *testing.T) (*ec.PrivateKey, *ec.PublicKey) {
 // ---------------------------------------------------------------------------
 
 func TestAesGCMEncrypt_InvalidKeyLength(t *testing.T) {
-	_, err := aesGCMEncrypt([]byte("hello"), make([]byte, 15))
+	_, err := aesGCMEncrypt([]byte("hello"), make([]byte, 15), nil)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrDecryptionFailed)
 }
 
 func TestAesGCMDecrypt_InvalidKeyLength(t *testing.T) {
 	ct := make([]byte, MinCiphertextLen+1)
-	_, err := aesGCMDecrypt(ct, make([]byte, 15))
+	_, err := aesGCMDecrypt(ct, make([]byte, 15), nil)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrDecryptionFailed)
 }
@@ -37,11 +37,11 @@ func TestAesGCMDecrypt_InvalidKeyLength(t *testing.T) {
 func TestAesGCMEncrypt_EmptyPlaintext(t *testing.T) {
 	key := make([]byte, 32)
 	rand.Read(key)
-	ct, err := aesGCMEncrypt([]byte{}, key)
+	ct, err := aesGCMEncrypt([]byte{}, key, nil)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(ct), MinCiphertextLen)
 
-	pt, err := aesGCMDecrypt(ct, key)
+	pt, err := aesGCMDecrypt(ct, key, nil)
 	require.NoError(t, err)
 	assert.Empty(t, pt)
 }
@@ -49,14 +49,14 @@ func TestAesGCMEncrypt_EmptyPlaintext(t *testing.T) {
 func TestAesGCMDecrypt_ExactMinLength(t *testing.T) {
 	ct := make([]byte, MinCiphertextLen)
 	key := make([]byte, 32)
-	_, err := aesGCMDecrypt(ct, key)
+	_, err := aesGCMDecrypt(ct, key, nil)
 	assert.Error(t, err)
 }
 
 func TestAesGCMDecrypt_NonceSizeEdge(t *testing.T) {
 	key := make([]byte, 32)
 	ct := make([]byte, MinCiphertextLen+1)
-	_, err := aesGCMDecrypt(ct, key)
+	_, err := aesGCMDecrypt(ct, key, nil)
 	assert.Error(t, err)
 }
 

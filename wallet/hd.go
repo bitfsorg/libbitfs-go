@@ -36,9 +36,9 @@ type Wallet struct {
 
 // KeyPair holds a derived public/private key pair.
 type KeyPair struct {
-	PrivateKey *ec.PrivateKey
-	PublicKey  *ec.PublicKey
-	Path       string // Human-readable derivation path
+	PrivateKey *ec.PrivateKey `json:"-"`
+	PublicKey  *ec.PublicKey  `json:"public_key"`
+	Path       string         `json:"path"` // Human-readable derivation path
 }
 
 // NewWallet creates a new Wallet from a BIP39 seed.

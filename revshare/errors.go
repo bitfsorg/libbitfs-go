@@ -32,4 +32,13 @@ var (
 
 	// ErrRegistryLocked indicates share transfers are locked.
 	ErrRegistryLocked = errors.New("revshare: registry is locked")
+
+	// ErrShareSumMismatch indicates the sum of entry shares does not equal totalShares.
+	ErrShareSumMismatch = errors.New("revshare: sum of entry shares does not equal total shares")
+
+	// ErrOverflow indicates an arithmetic overflow in financial computation.
+	ErrOverflow = errors.New("revshare: arithmetic overflow")
+
+	// ErrTooManyEntries indicates entry count exceeds serialization limit.
+	ErrTooManyEntries = errors.New("revshare: entry count exceeds uint32 max")
 )

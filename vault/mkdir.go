@@ -215,9 +215,13 @@ func (v *Vault) getNodeUTXOWithState(pubKeyHex string) (*txUTXO, *UTXOState, err
 	return txU, utxoState, nil
 }
 
-// mustDecodeHex decodes a hex string, returning nil on error.
+// mustDecodeHex decodes a hex string.
+// Panics on invalid input — only call with validated hex data.
 func mustDecodeHex(s string) []byte {
-	b, _ := hex.DecodeString(s)
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic("mustDecodeHex: " + err.Error())
+	}
 	return b
 }
 

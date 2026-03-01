@@ -91,7 +91,7 @@ func FuzzAESGCMDecryptNoPanic(f *testing.F) {
 	f.Add(make([]byte, 100), make([]byte, 16))
 
 	f.Fuzz(func(t *testing.T, ciphertext, key []byte) {
-		aesGCMDecrypt(ciphertext, key)
+		aesGCMDecrypt(ciphertext, key, nil)
 	})
 }
 

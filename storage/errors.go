@@ -26,4 +26,10 @@ var (
 
 	// ErrRecombinationHashMismatch indicates chunk recombination hash verification failed.
 	ErrRecombinationHashMismatch = errors.New("storage: recombination hash mismatch")
+
+	// ErrDecompressedTooLarge indicates decompressed data exceeds the safety limit.
+	ErrDecompressedTooLarge = errors.New("storage: decompressed data exceeds maximum size")
+
+	// ErrInvalidChunkSize indicates the chunk size is not a positive integer.
+	ErrInvalidChunkSize = errors.New("storage: chunk size must be positive")
 )

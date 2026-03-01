@@ -10,9 +10,13 @@ const DefaultChunkSize = 1 << 20
 
 // SplitIntoChunks splits data into fixed-size chunks.
 // The last chunk may be smaller than chunkSize.
-func SplitIntoChunks(data []byte, chunkSize int) [][]byte {
+// Returns an error if chunkSize is not positive.
+func SplitIntoChunks(data []byte, chunkSize int) ([][]byte, error) {
+	if chunkSize <= 0 {
+		return nil, ErrInvalidChunkSize
+	}
 	if len(data) == 0 {
-		return nil
+		return nil, nil
 	}
 	var chunks [][]byte
 	for i := 0; i < len(data); i += chunkSize {
@@ -24,7 +28,7 @@ func SplitIntoChunks(data []byte, chunkSize int) [][]byte {
 		copy(chunk, data[i:end])
 		chunks = append(chunks, chunk)
 	}
-	return chunks
+	return chunks, nil
 }
 
 // ComputeRecombinationHash computes SHA256(chunk0 || chunk1 || ...).

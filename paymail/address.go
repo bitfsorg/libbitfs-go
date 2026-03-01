@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // PostClient extends HTTPClient with POST capability.
@@ -17,19 +18,23 @@ type PostClient interface {
 	Post(url, contentType string, body io.Reader) (*http.Response, error)
 }
 
-// defaultPostClient wraps http.DefaultClient to implement PostClient.
-type defaultPostClient struct{}
+// defaultPostClient wraps an http.Client with timeout to implement PostClient.
+type defaultPostClient struct {
+	client *http.Client
+}
 
 func (d *defaultPostClient) Get(rawURL string) (*http.Response, error) {
-	return http.DefaultClient.Get(rawURL)
+	return d.client.Get(rawURL)
 }
 
 func (d *defaultPostClient) Post(rawURL, contentType string, body io.Reader) (*http.Response, error) {
-	return http.DefaultClient.Post(rawURL, contentType, body)
+	return d.client.Post(rawURL, contentType, body)
 }
 
-// DefaultPostClient is the production PostClient.
-var DefaultPostClient PostClient = &defaultPostClient{}
+// DefaultPostClient is the production PostClient with a 30-second timeout.
+var DefaultPostClient PostClient = &defaultPostClient{
+	client: &http.Client{Timeout: 30 * time.Second},
+}
 
 // PaymentOutput represents a single output in a P2P payment destination response.
 type PaymentOutput struct {

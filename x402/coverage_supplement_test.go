@@ -182,7 +182,7 @@ func TestVerifyPayment_NonP2PKHOutputs(t *testing.T) {
 		Expiry:      time.Now().Unix() + 3600,
 	}
 	proof := &PaymentProof{RawTx: raw}
-	err := VerifyPayment(proof, invoice)
+	_, err := VerifyPayment(proof, invoice)
 	assert.Error(t, err)
 }
 
@@ -198,7 +198,7 @@ func TestVerifyPayment_EmptyPaymentAddress(t *testing.T) {
 		Expiry:      time.Now().Unix() + 3600,
 	}
 	proof := &PaymentProof{RawTx: raw}
-	err = VerifyPayment(proof, invoice)
+	_, err = VerifyPayment(proof, invoice)
 	assert.Error(t, err)
 }
 
@@ -215,7 +215,7 @@ func TestVerifyPayment_ExactAmount(t *testing.T) {
 		Expiry:      time.Now().Unix() + 3600,
 	}
 	proof := &PaymentProof{RawTx: raw}
-	err = VerifyPayment(proof, invoice)
+	_, err = VerifyPayment(proof, invoice)
 	assert.NoError(t, err)
 }
 

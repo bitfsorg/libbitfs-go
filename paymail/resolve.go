@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // PaymailCapabilities holds discovered Paymail server capabilities.
@@ -31,8 +32,8 @@ type HTTPClient interface {
 	Get(url string) (*http.Response, error)
 }
 
-// DefaultHTTPClient is the production HTTP client.
-var DefaultHTTPClient HTTPClient = http.DefaultClient
+// DefaultHTTPClient is the production HTTP client with a 30-second timeout.
+var DefaultHTTPClient HTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // wellKnownResponse represents the JSON structure of .well-known/bsvalias.
 type wellKnownResponse struct {
@@ -99,7 +100,7 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 		}
 		// Validate URL is well-formed and uses HTTPS.
 		parsed, err := url.Parse(urlStr)
-		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "") {
+		if err != nil || parsed.Scheme != "https" {
 			continue
 		}
 		switch {

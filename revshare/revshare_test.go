@@ -901,3 +901,77 @@ func TestValidateDistribution_ZeroTotalShares(t *testing.T) {
 	dists := []Distribution{{Address: makeAddr(0xAA), Amount: 10000}}
 	assert.Error(t, ValidateDistribution(dists, entries, 10000, 0))
 }
+
+// --- Integer safety tests (C-1, C-2, C-3, H-1, H-2 fixes) ---
+
+func TestDistributeRevenue_ShareSumMismatch(t *testing.T) {
+	// C-3: sum(entries.Share) != totalShares must return error.
+	entries := []RevShareEntry{
+		{Address: makeAddr(0xAA), Share: 80},
+		{Address: makeAddr(0xBB), Share: 80},
+		{Address: makeAddr(0xCC), Share: 80},
+	}
+	_, err := DistributeRevenue(1000, entries, 100)
+	assert.ErrorIs(t, err, ErrShareSumMismatch)
+}
+
+func TestDistributeRevenue_ShareSumOverflow(t *testing.T) {
+	// C-3: entries whose shares overflow uint64 must return error.
+	entries := []RevShareEntry{
+		{Address: makeAddr(0xAA), Share: ^uint64(0)},
+		{Address: makeAddr(0xBB), Share: 1},
+	}
+	_, err := DistributeRevenue(1000, entries, ^uint64(0))
+	assert.ErrorIs(t, err, ErrOverflow)
+}
+
+func TestDistributeRevenue_LargeMultiplication(t *testing.T) {
+	// C-1: Values that would overflow naive uint64 multiplication.
+	// totalPayment * entry.Share > 2^64, but result fits in uint64.
+	maxU64 := ^uint64(0)
+	entries := []RevShareEntry{
+		{Address: makeAddr(0xAA), Share: maxU64 / 2},
+		{Address: makeAddr(0xBB), Share: maxU64 - maxU64/2},
+	}
+	dists, err := DistributeRevenue(maxU64, entries, maxU64)
+	require.NoError(t, err)
+	assert.Equal(t, maxU64/2, dists[0].Amount)
+	// Last entry gets remainder
+	assert.Equal(t, maxU64-maxU64/2, dists[1].Amount)
+}
+
+func TestDistributeRevenue_128BitIntermediate(t *testing.T) {
+	// Test that 128-bit intermediate multiplication works correctly.
+	// totalPayment=18446744073709551615, entry.Share=10000, totalShares=10000
+	// Naive: 18446744073709551615 * 10000 overflows uint64
+	// Expected: 18446744073709551615
+	maxU64 := ^uint64(0)
+	entries := []RevShareEntry{
+		{Address: makeAddr(0xAA), Share: 10000},
+	}
+	dists, err := DistributeRevenue(maxU64, entries, 10000)
+	require.NoError(t, err)
+	assert.Equal(t, maxU64, dists[0].Amount)
+}
+
+func TestValidateShareConservation_Overflow(t *testing.T) {
+	// H-1: inputs that would overflow uint64 sum must return error.
+	nodeID := makeNodeID(0x01)
+	inputs := []ShareData{
+		{NodeID: nodeID, Amount: ^uint64(0)},
+		{NodeID: nodeID, Amount: 1},
+	}
+	outputs := []ShareData{{NodeID: nodeID, Amount: 0}}
+	err := ValidateShareConservation(inputs, outputs)
+	assert.ErrorIs(t, err, ErrOverflow)
+}
+
+func TestDistributeRevenue_SingleShareEqualsTotal(t *testing.T) {
+	// Edge case: single entry where share == totalShares.
+	entries := []RevShareEntry{
+		{Address: makeAddr(0xAA), Share: 1},
+	}
+	dists, err := DistributeRevenue(999, entries, 1)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(999), dists[0].Amount)
+}

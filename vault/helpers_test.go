@@ -128,17 +128,14 @@ func TestMustDecodeHex(t *testing.T) {
 		t.Errorf("mustDecodeHex(abcd) = %x, want abcd", b)
 	}
 
-	// Invalid hex returns empty (hex.DecodeString returns empty on error).
-	b = mustDecodeHex("zzzz")
-	if len(b) != 0 {
-		t.Errorf("mustDecodeHex(invalid) = %x, want empty", b)
-	}
-
-	// Empty string.
+	// Empty string is valid (returns empty).
 	b = mustDecodeHex("")
 	if len(b) != 0 {
 		t.Errorf("mustDecodeHex(empty) = %x, want empty", b)
 	}
+
+	// Invalid hex should panic.
+	assert.Panics(t, func() { mustDecodeHex("zzzz") }, "invalid hex should panic")
 }
 
 func TestNodeTypeInt(t *testing.T) {
@@ -180,15 +177,13 @@ func TestNodeTypeFromString(t *testing.T) {
 }
 
 func TestMustDecompressPubKey(t *testing.T) {
-	// Invalid hex.
-	if mustDecompressPubKey("zzzz") != nil {
-		t.Error("mustDecompressPubKey(invalid hex) expected nil")
-	}
+	// Invalid hex should panic.
+	assert.Panics(t, func() { mustDecompressPubKey("zzzz") }, "invalid hex should panic")
 
-	// Valid hex but not a valid pubkey.
-	if mustDecompressPubKey("000000000000000000000000000000000000000000000000000000000000000000") != nil {
-		t.Error("mustDecompressPubKey(zero key) expected nil")
-	}
+	// Valid hex but not a valid pubkey should panic.
+	assert.Panics(t, func() {
+		mustDecompressPubKey("000000000000000000000000000000000000000000000000000000000000000000")
+	}, "zero key should panic")
 }
 
 func TestPubKeyHash_MatchesGoSDK(t *testing.T) {

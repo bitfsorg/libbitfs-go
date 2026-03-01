@@ -3,6 +3,7 @@ package revshare
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 const (
@@ -13,6 +14,9 @@ const (
 
 // SerializeRegistry serializes a RegistryState to binary format.
 func SerializeRegistry(state *RegistryState) ([]byte, error) {
+	if len(state.Entries) > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: %d entries", ErrTooManyEntries, len(state.Entries))
+	}
 	size := registryHeaderSize + registryEntrySize*len(state.Entries) + registryTrailerSize
 	buf := make([]byte, size)
 	offset := 0

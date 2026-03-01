@@ -466,13 +466,13 @@ func TestParseHTLCPreimage_ValidTx(t *testing.T) {
 
 func TestVerifyPayment_NilProof(t *testing.T) {
 	inv := &Invoice{Expiry: time.Now().Unix() + 3600}
-	err := VerifyPayment(nil, inv)
+	_, err := VerifyPayment(nil, inv)
 	assert.ErrorIs(t, err, ErrInvalidParams)
 }
 
 func TestVerifyPayment_NilInvoice(t *testing.T) {
 	proof := &PaymentProof{RawTx: []byte{0x01}}
-	err := VerifyPayment(proof, nil)
+	_, err := VerifyPayment(proof, nil)
 	assert.ErrorIs(t, err, ErrInvalidParams)
 }
 
@@ -482,7 +482,7 @@ func TestVerifyPayment_ExpiredInvoice(t *testing.T) {
 		PaymentAddr: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
 	}
 	proof := &PaymentProof{RawTx: []byte{0x01}}
-	err := VerifyPayment(proof, inv)
+	_, err := VerifyPayment(proof, inv)
 	assert.ErrorIs(t, err, ErrInvoiceExpired)
 }
 
@@ -492,7 +492,7 @@ func TestVerifyPayment_EmptyRawTx(t *testing.T) {
 		PaymentAddr: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
 	}
 	proof := &PaymentProof{RawTx: []byte{}}
-	err := VerifyPayment(proof, inv)
+	_, err := VerifyPayment(proof, inv)
 	assert.ErrorIs(t, err, ErrInvalidTx)
 }
 
@@ -502,7 +502,7 @@ func TestVerifyPayment_InvalidRawTx(t *testing.T) {
 		PaymentAddr: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
 	}
 	proof := &PaymentProof{RawTx: []byte{0x01, 0x02, 0x03}}
-	err := VerifyPayment(proof, inv)
+	_, err := VerifyPayment(proof, inv)
 	assert.ErrorIs(t, err, ErrInvalidTx)
 }
 
@@ -524,7 +524,7 @@ func TestVerifyPayment_Success(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.NoError(t, err)
 }
 
@@ -544,7 +544,7 @@ func TestVerifyPayment_InsufficientAmount(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.ErrorIs(t, err, ErrInsufficientPayment)
 }
 
@@ -563,7 +563,7 @@ func TestVerifyPayment_NoMatchingOutput(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.ErrorIs(t, err, ErrNoMatchingOutput)
 }
 
@@ -584,7 +584,7 @@ func TestVerifyPayment_InvalidInvoiceAddress(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.ErrorIs(t, err, ErrInvalidParams)
 	assert.Contains(t, err.Error(), "invalid invoice address")
 }
@@ -606,7 +606,7 @@ func TestVerifyPayment_Overpayment(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.NoError(t, err, "overpayment should be accepted")
 }
 
@@ -632,7 +632,7 @@ func TestVerifyPayment_MultipleOutputs_OneMatches(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.NoError(t, err, "should succeed when one of multiple outputs matches")
 }
 
@@ -663,7 +663,7 @@ func TestVerifyPayment_SkipsNonP2PKH(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.NoError(t, err, "should skip OP_RETURN output and find matching P2PKH output")
 }
 
@@ -698,7 +698,7 @@ func TestVerifyPayment_NilLockingScript(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: rawTx}
 
-	err = VerifyPayment(proof, inv)
+	_, err = VerifyPayment(proof, inv)
 	assert.NoError(t, err, "should skip empty-script output and find matching P2PKH output")
 }
 

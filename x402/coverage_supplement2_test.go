@@ -92,7 +92,7 @@ func TestVerifyPayment_EmptyLockingScript(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: raw}
 
-	err := VerifyPayment(proof, inv)
+	_, err := VerifyPayment(proof, inv)
 	assert.NoError(t, err, "should skip empty LockingScript output and match the valid one")
 }
 
@@ -113,7 +113,7 @@ func TestVerifyPayment_ZeroPriceInvoice(t *testing.T) {
 	}
 	proof := &PaymentProof{RawTx: raw}
 
-	err := VerifyPayment(proof, inv)
+	_, err := VerifyPayment(proof, inv)
 	assert.NoError(t, err, "zero-price invoice should accept zero-value output")
 }
 

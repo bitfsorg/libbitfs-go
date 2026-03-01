@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/lzw"
+	"fmt"
 	"io"
 
 	"github.com/bitfsorg/libbitfs-go/metanet"
 )
+
+// MaxDecompressedSize is the maximum allowed decompressed data size (256 MB).
+// Prevents zip-bomb attacks where a small compressed payload expands to exhaust memory.
+const MaxDecompressedSize = 256 << 20
 
 // Compress compresses data using the specified scheme.
 func Compress(data []byte, scheme int32) ([]byte, error) {
@@ -51,11 +56,18 @@ func compressLZW(data []byte) ([]byte, error) {
 
 func decompressLZW(data []byte) ([]byte, error) {
 	r := lzw.NewReader(bytes.NewReader(data), lzw.LSB, 8)
-	result, err := io.ReadAll(r)
+	limited := io.LimitReader(r, MaxDecompressedSize+1)
+	result, err := io.ReadAll(limited)
 	if closeErr := r.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
-	return result, err
+	if err != nil {
+		return nil, err
+	}
+	if len(result) > MaxDecompressedSize {
+		return nil, fmt.Errorf("%w: exceeds %d bytes", ErrDecompressedTooLarge, MaxDecompressedSize)
+	}
+	return result, nil
 }
 
 func compressGZIP(data []byte) ([]byte, error) {
@@ -75,9 +87,16 @@ func decompressGZIP(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, readErr := io.ReadAll(r)
+	limited := io.LimitReader(r, MaxDecompressedSize+1)
+	result, readErr := io.ReadAll(limited)
 	if closeErr := r.Close(); closeErr != nil && readErr == nil {
 		readErr = closeErr
 	}
-	return result, readErr
+	if readErr != nil {
+		return nil, readErr
+	}
+	if len(result) > MaxDecompressedSize {
+		return nil, fmt.Errorf("%w: exceeds %d bytes", ErrDecompressedTooLarge, MaxDecompressedSize)
+	}
+	return result, nil
 }

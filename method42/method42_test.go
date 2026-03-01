@@ -217,11 +217,11 @@ func TestAESGCM_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ciphertext, err := aesGCMEncrypt(tt.plaintext, key)
+			ciphertext, err := aesGCMEncrypt(tt.plaintext, key, nil)
 			require.NoError(t, err)
 			assert.Greater(t, len(ciphertext), len(tt.plaintext), "ciphertext should be longer due to nonce+tag")
 
-			decrypted, err := aesGCMDecrypt(ciphertext, key)
+			decrypted, err := aesGCMDecrypt(ciphertext, key, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.plaintext, decrypted, "round-trip should preserve plaintext")
 		})
@@ -232,10 +232,10 @@ func TestAESGCM_DifferentNonces(t *testing.T) {
 	key := bytes.Repeat([]byte{0xab}, 32)
 	plaintext := []byte("same plaintext")
 
-	ct1, err := aesGCMEncrypt(plaintext, key)
+	ct1, err := aesGCMEncrypt(plaintext, key, nil)
 	require.NoError(t, err)
 
-	ct2, err := aesGCMEncrypt(plaintext, key)
+	ct2, err := aesGCMEncrypt(plaintext, key, nil)
 	require.NoError(t, err)
 
 	// Ciphertexts should differ due to random nonce
@@ -247,10 +247,10 @@ func TestAESGCM_WrongKey(t *testing.T) {
 	key2 := bytes.Repeat([]byte{0xcd}, 32)
 	plaintext := []byte("secret data")
 
-	ciphertext, err := aesGCMEncrypt(plaintext, key1)
+	ciphertext, err := aesGCMEncrypt(plaintext, key1, nil)
 	require.NoError(t, err)
 
-	_, err = aesGCMDecrypt(ciphertext, key2)
+	_, err = aesGCMDecrypt(ciphertext, key2, nil)
 	assert.ErrorIs(t, err, ErrDecryptionFailed, "wrong key should fail decryption")
 }
 
@@ -258,7 +258,7 @@ func TestAESGCM_TamperedCiphertext(t *testing.T) {
 	key := bytes.Repeat([]byte{0xab}, 32)
 	plaintext := []byte("authentic data")
 
-	ciphertext, err := aesGCMEncrypt(plaintext, key)
+	ciphertext, err := aesGCMEncrypt(plaintext, key, nil)
 	require.NoError(t, err)
 
 	// Tamper with the ciphertext (after nonce, before tag)
@@ -266,13 +266,13 @@ func TestAESGCM_TamperedCiphertext(t *testing.T) {
 		ciphertext[NonceLen+1] ^= 0xff
 	}
 
-	_, err = aesGCMDecrypt(ciphertext, key)
+	_, err = aesGCMDecrypt(ciphertext, key, nil)
 	assert.ErrorIs(t, err, ErrDecryptionFailed, "tampered ciphertext should fail authentication")
 }
 
 func TestAESGCM_TooShort(t *testing.T) {
 	key := bytes.Repeat([]byte{0xab}, 32)
-	_, err := aesGCMDecrypt([]byte{0x01, 0x02, 0x03}, key) // way too short
+	_, err := aesGCMDecrypt([]byte{0x01, 0x02, 0x03}, key, nil) // way too short
 	assert.ErrorIs(t, err, ErrInvalidCiphertext)
 }
 
@@ -630,8 +630,9 @@ func TestDecrypt_KeyHashMismatch_ContentIntegrity(t *testing.T) {
 	aesKey, err := DeriveAESKey(sharedNode, fakeKeyHash)
 	require.NoError(t, err)
 
-	// Encrypt plaintext directly with that AES key
-	ciphertext, err := aesGCMEncrypt(plaintext, aesKey)
+	// Encrypt plaintext directly with that AES key, using fakeKeyHash as AAD
+	// (matches what DecryptWithCapsule will use for decryption).
+	ciphertext, err := aesGCMEncrypt(plaintext, aesKey, fakeKeyHash)
 	require.NoError(t, err)
 
 	// Construct capsule = aesKey XOR buyerMask (what ComputeCapsule would produce)
@@ -673,11 +674,12 @@ func TestDecrypt_KeyHashMismatch_ViaDecrypt(t *testing.T) {
 	aesKey, err := DeriveAESKey(sharedX, fakeKeyHash)
 	require.NoError(t, err)
 
-	// Encrypt directly with that key
-	ciphertext, err := aesGCMEncrypt(plaintext, aesKey)
+	// Encrypt directly with that key, using fakeKeyHash as AAD
+	// (matches what Decrypt will use for decryption).
+	ciphertext, err := aesGCMEncrypt(plaintext, aesKey, fakeKeyHash)
 	require.NoError(t, err)
 
-	// Decrypt expects AES to succeed (because key matches), then integrity fails
+	// Decrypt expects AES to succeed (because key and AAD match), then integrity fails
 	_, err = Decrypt(ciphertext, nil, pubKey, fakeKeyHash, AccessFree)
 	assert.ErrorIs(t, err, ErrKeyHashMismatch,
 		"should return ErrKeyHashMismatch from Decrypt when content hash diverges")
@@ -915,7 +917,7 @@ func TestAESGCM_MinimalCiphertext(t *testing.T) {
 	key := bytes.Repeat([]byte{0xab}, 32)
 
 	// Encrypt empty plaintext
-	ciphertext, err := aesGCMEncrypt([]byte{}, key)
+	ciphertext, err := aesGCMEncrypt([]byte{}, key, nil)
 	require.NoError(t, err)
 
 	// Ciphertext should be exactly 28 bytes: 12 (nonce) + 16 (GCM tag)
@@ -923,7 +925,7 @@ func TestAESGCM_MinimalCiphertext(t *testing.T) {
 		"empty plaintext should produce exactly nonce+tag bytes")
 
 	// Decrypt should succeed and return empty
-	plaintext, err := aesGCMDecrypt(ciphertext, key)
+	plaintext, err := aesGCMDecrypt(ciphertext, key, nil)
 	require.NoError(t, err)
 	assert.Empty(t, plaintext)
 }

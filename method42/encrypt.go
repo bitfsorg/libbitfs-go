@@ -126,8 +126,8 @@ func Encrypt(plaintext []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicKe
 		return nil, err
 	}
 
-	// Step 5: Encrypt with AES-256-GCM
-	ciphertext, err := aesGCMEncrypt(plaintext, aesKey)
+	// Step 5: Encrypt with AES-256-GCM (keyHash as AAD binds ciphertext to context)
+	ciphertext, err := aesGCMEncrypt(plaintext, aesKey, keyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -171,8 +171,8 @@ func Decrypt(ciphertext []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicK
 		return nil, err
 	}
 
-	// Decrypt with AES-256-GCM
-	plaintext, err := aesGCMDecrypt(ciphertext, aesKey)
+	// Decrypt with AES-256-GCM (keyHash as AAD binds ciphertext to context)
+	plaintext, err := aesGCMDecrypt(ciphertext, aesKey, keyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -250,8 +250,8 @@ func DecryptWithCapsuleNonce(ciphertext []byte, capsule []byte, keyHash []byte,
 	// 3. aesKey = capsule XOR buyerMask
 	aesKey := xorBytes(capsule, buyerMask)
 
-	// 4. Decrypt with AES-256-GCM
-	plaintext, err := aesGCMDecrypt(ciphertext, aesKey)
+	// 4. Decrypt with AES-256-GCM (keyHash as AAD)
+	plaintext, err := aesGCMDecrypt(ciphertext, aesKey, keyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,7 @@ func EncryptMetadata(tlvPayload []byte, privateKey *ec.PrivateKey, publicKey *ec
 		return nil, err
 	}
 
-	ciphertext, err := aesGCMEncrypt(tlvPayload, metaKey)
+	ciphertext, err := aesGCMEncrypt(tlvPayload, metaKey, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -349,12 +349,14 @@ func DecryptMetadata(encPayload []byte, privateKey *ec.PrivateKey, publicKey *ec
 		return nil, err
 	}
 
-	return aesGCMDecrypt(ciphertext, metaKey)
+	return aesGCMDecrypt(ciphertext, metaKey, salt)
 }
 
 // aesGCMEncrypt encrypts plaintext with AES-256-GCM.
+// The aad parameter provides Additional Authenticated Data that binds the
+// ciphertext to a specific context (e.g., key_hash for files, salt for metadata).
 // Returns nonce(12B) || ciphertext || tag(16B).
-func aesGCMEncrypt(plaintext, key []byte) ([]byte, error) {
+func aesGCMEncrypt(plaintext, key, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("%w: AES cipher creation failed: %w", ErrDecryptionFailed, err)
@@ -372,13 +374,14 @@ func aesGCMEncrypt(plaintext, key []byte) ([]byte, error) {
 	}
 
 	// Output format: nonce(12B) || ciphertext || GCM tag(16B)
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, aad)
 	return ciphertext, nil
 }
 
 // aesGCMDecrypt decrypts AES-256-GCM ciphertext.
+// The aad parameter must match the AAD used during encryption.
 // Input format: nonce(12B) || ciphertext || tag(16B).
-func aesGCMDecrypt(ciphertext, key []byte) ([]byte, error) {
+func aesGCMDecrypt(ciphertext, key, aad []byte) ([]byte, error) {
 	if len(ciphertext) < MinCiphertextLen {
 		return nil, ErrInvalidCiphertext
 	}
@@ -401,7 +404,7 @@ func aesGCMDecrypt(ciphertext, key []byte) ([]byte, error) {
 	nonce := ciphertext[:nonceSize]
 	encrypted := ciphertext[nonceSize:]
 
-	plaintext, err := gcm.Open(nil, nonce, encrypted, nil)
+	plaintext, err := gcm.Open(nil, nonce, encrypted, aad)
 	if err != nil {
 		return nil, ErrDecryptionFailed
 	}

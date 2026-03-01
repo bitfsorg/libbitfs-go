@@ -26,7 +26,8 @@ func TestSplitIntoChunks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := bytes.Repeat([]byte{0xAB}, tt.dataSize)
-			chunks := SplitIntoChunks(data, tt.chunkSize)
+			chunks, err := SplitIntoChunks(data, tt.chunkSize)
+			require.NoError(t, err)
 			assert.Len(t, chunks, tt.wantChunks)
 
 			// Recombine and verify
@@ -60,7 +61,8 @@ func TestComputeRecombinationHash(t *testing.T) {
 
 func TestRecombineChunks_Valid(t *testing.T) {
 	data := bytes.Repeat([]byte{0xAA}, 2500)
-	chunks := SplitIntoChunks(data, 1000)
+	chunks, err := SplitIntoChunks(data, 1000)
+	require.NoError(t, err)
 	hash := ComputeRecombinationHash(chunks)
 
 	result, err := RecombineChunks(chunks, hash)
@@ -84,6 +86,16 @@ func TestRecombineChunks_EmptyChunks(t *testing.T) {
 }
 
 func TestSplitIntoChunks_EmptyData(t *testing.T) {
-	chunks := SplitIntoChunks(nil, 1024)
+	chunks, err := SplitIntoChunks(nil, 1024)
+	require.NoError(t, err)
 	assert.Empty(t, chunks)
+}
+
+func TestSplitIntoChunks_InvalidChunkSize(t *testing.T) {
+	data := []byte("test data")
+	_, err := SplitIntoChunks(data, 0)
+	assert.ErrorIs(t, err, ErrInvalidChunkSize)
+
+	_, err = SplitIntoChunks(data, -1)
+	assert.ErrorIs(t, err, ErrInvalidChunkSize)
 }

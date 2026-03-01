@@ -1,15 +1,20 @@
 package revshare
 
-import "fmt"
+import (
+	"fmt"
+	"math/bits"
+)
 
 // ValidateShareConservation checks that total input shares equal total output shares.
+// Uses overflow-safe summation to prevent uint64 wrap-around attacks.
 func ValidateShareConservation(inputs []ShareData, outputs []ShareData) error {
-	var inputTotal, outputTotal uint64
-	for _, in := range inputs {
-		inputTotal += in.Amount
+	inputTotal, err := safeSum(inputs)
+	if err != nil {
+		return fmt.Errorf("%w: input %w", ErrOverflow, err)
 	}
-	for _, out := range outputs {
-		outputTotal += out.Amount
+	outputTotal, err := safeSum(outputs)
+	if err != nil {
+		return fmt.Errorf("%w: output %w", ErrOverflow, err)
 	}
 	if inputTotal != outputTotal {
 		return fmt.Errorf("%w: input=%d output=%d", ErrShareConservationViolation, inputTotal, outputTotal)
@@ -37,4 +42,17 @@ func ValidateDistribution(distributions []Distribution, entries []RevShareEntry,
 		}
 	}
 	return nil
+}
+
+// safeSum computes the sum of ShareData amounts with overflow detection.
+func safeSum(items []ShareData) (uint64, error) {
+	var total uint64
+	for _, item := range items {
+		sum, carry := bits.Add64(total, item.Amount, 0)
+		if carry != 0 {
+			return 0, fmt.Errorf("sum overflow at amount %d", item.Amount)
+		}
+		total = sum
+	}
+	return total, nil
 }

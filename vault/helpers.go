@@ -44,15 +44,15 @@ func pubKeyHash(pub *ec.PublicKey) []byte {
 }
 
 // mustDecompressPubKey parses a hex-encoded compressed public key.
-// Panics on invalid input (should only be called with validated data).
+// Panics on invalid input — only call with validated data from HD derivation.
 func mustDecompressPubKey(hexStr string) *ec.PublicKey {
 	b, err := hex.DecodeString(hexStr)
 	if err != nil {
-		return nil
+		panic("mustDecompressPubKey: invalid hex: " + err.Error())
 	}
 	pub, err := ec.PublicKeyFromBytes(b)
 	if err != nil {
-		return nil
+		panic("mustDecompressPubKey: invalid public key: " + err.Error())
 	}
 	return pub
 }

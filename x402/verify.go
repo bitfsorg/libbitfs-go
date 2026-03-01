@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -8,42 +9,49 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 )
 
-// VerifyPayment verifies that a submitted transaction pays the required invoice.
-//  1. Check invoice is not expired
-//  2. Deserialize raw_tx
-//  3. Find output matching invoice amount and address
-func VerifyPayment(proof *PaymentProof, invoice *Invoice) error {
+// VerifyPayment checks that a submitted transaction contains an output paying
+// the required invoice amount to the invoice address.
+//
+// WARNING: This function does NOT verify input signatures. Callers MUST
+// independently confirm the transaction is accepted by the network (mempool
+// or confirmed) before delivering content.
+//
+// WARNING: This function does NOT bind the payment to a specific InvoiceID.
+// Callers MUST track used TxIDs to prevent cross-invoice payment reuse.
+//
+// Returns the transaction ID (TxID hex) on success for caller tracking.
+func VerifyPayment(proof *PaymentProof, invoice *Invoice) (string, error) {
 	if proof == nil {
-		return fmt.Errorf("%w: nil payment proof", ErrInvalidParams)
+		return "", fmt.Errorf("%w: nil payment proof", ErrInvalidParams)
 	}
 	if invoice == nil {
-		return fmt.Errorf("%w: nil invoice", ErrInvalidParams)
+		return "", fmt.Errorf("%w: nil invoice", ErrInvalidParams)
 	}
 
 	// Check invoice expiry
 	if time.Now().Unix() > invoice.Expiry {
-		return ErrInvoiceExpired
+		return "", ErrInvoiceExpired
 	}
 
 	// Deserialize the transaction
 	if len(proof.RawTx) == 0 {
-		return fmt.Errorf("%w: empty raw transaction", ErrInvalidTx)
+		return "", fmt.Errorf("%w: empty raw transaction", ErrInvalidTx)
 	}
 
 	tx, err := transaction.NewTransactionFromBytes(proof.RawTx)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidTx, err)
+		return "", fmt.Errorf("%w: %w", ErrInvalidTx, err)
 	}
 
 	// Parse the expected payment address to get its script
 	expectedAddr, err := script.NewAddressFromString(invoice.PaymentAddr)
 	if err != nil {
-		return fmt.Errorf("%w: invalid invoice address: %w", ErrInvalidParams, err)
+		return "", fmt.Errorf("%w: invalid invoice address: %w", ErrInvalidParams, err)
 	}
 
 	expectedPKH := []byte(expectedAddr.PublicKeyHash)
 	if len(expectedPKH) == 0 {
-		return fmt.Errorf("%w: empty public key hash from address", ErrInvalidParams)
+		return "", fmt.Errorf("%w: empty public key hash from address", ErrInvalidParams)
 	}
 
 	// Search for a matching output
@@ -63,26 +71,13 @@ func VerifyPayment(proof *PaymentProof, invoice *Invoice) error {
 			continue
 		}
 
-		// Compare public key hashes
-		if len(outputPKH) != len(expectedPKH) {
-			continue
-		}
-
-		match := true
-		for i := range outputPKH {
-			if outputPKH[i] != expectedPKH[i] {
-				match = false
-				break
-			}
-		}
-
-		if !match {
+		if !bytes.Equal(outputPKH, expectedPKH) {
 			continue
 		}
 
 		// Check amount
 		if output.Satoshis < invoice.Price {
-			return fmt.Errorf("%w: output has %d satoshis, need %d",
+			return "", fmt.Errorf("%w: output has %d satoshis, need %d",
 				ErrInsufficientPayment, output.Satoshis, invoice.Price)
 		}
 
@@ -91,8 +86,8 @@ func VerifyPayment(proof *PaymentProof, invoice *Invoice) error {
 	}
 
 	if !found {
-		return ErrNoMatchingOutput
+		return "", ErrNoMatchingOutput
 	}
 
-	return nil
+	return tx.TxID().String(), nil
 }
