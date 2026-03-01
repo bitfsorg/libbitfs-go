@@ -47,7 +47,7 @@ func TestEngineRefreshFeeUTXOs(t *testing.T) {
 		Chain: mock,
 		State: state,
 	}
-	err := eng.RefreshFeeUTXOs(context.Background(), "1A1zP1", "pubkeyhex")
+	err := eng.RefreshFeeUTXOs(context.Background(), "1A1zP1", "pubkeyhex", 0, 0)
 	require.NoError(t, err)
 
 	// Should have added 2 UTXOs.
@@ -74,7 +74,7 @@ func TestEngineRefreshFeeUTXOsDedup(t *testing.T) {
 	state.AddUTXO(&UTXOState{TxID: "aabb", Vout: 0, Amount: 50000, Type: "fee"})
 
 	eng := &Vault{Chain: mock, State: state}
-	err := eng.RefreshFeeUTXOs(context.Background(), "1A1zP1", "pubkeyhex")
+	err := eng.RefreshFeeUTXOs(context.Background(), "1A1zP1", "pubkeyhex", 0, 0)
 	require.NoError(t, err)
 
 	// Should NOT duplicate.
@@ -89,7 +89,7 @@ func TestEngineRefreshFeeUTXOsDedup(t *testing.T) {
 
 func TestEngineRefreshFeeUTXOsNilChain(t *testing.T) {
 	eng := &Vault{}
-	err := eng.RefreshFeeUTXOs(context.Background(), "addr", "pub")
+	err := eng.RefreshFeeUTXOs(context.Background(), "addr", "pub", 0, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no blockchain service")
 }

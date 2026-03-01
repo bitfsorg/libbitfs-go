@@ -130,6 +130,9 @@ func (v *Vault) Close() error {
 	if v.SPVStore != nil {
 		_ = v.SPVStore.Close()
 	}
+	if err := v.saveWalletState(); err != nil {
+		return fmt.Errorf("vault: save wallet state on close: %w", err)
+	}
 	return v.State.Save()
 }
 
@@ -235,6 +238,8 @@ func (v *Vault) ResolveVaultIndex(vaultName string) (uint32, error) {
 }
 
 // DeriveChangeAddr derives a change address (20-byte pubkey hash) from the fee chain.
+// Note: index is incremented eagerly. If the caller's operation fails,
+// the index gap is harmless — HD wallets tolerate gaps in derivation.
 func (v *Vault) DeriveChangeAddr() ([]byte, *ec.PrivateKey, error) {
 	idx := v.WState.NextChangeIndex
 	kp, err := v.Wallet.DeriveFeeKey(wallet.InternalChain, idx)
@@ -495,7 +500,8 @@ func displayHexToInternal(displayHex string) []byte {
 
 // RefreshFeeUTXOs queries the network for unspent outputs at the given address
 // and adds any new ones to local state as fee UTXOs.
-func (v *Vault) RefreshFeeUTXOs(ctx context.Context, address, pubKeyHex string) error {
+// chain and derivIdx identify the HD derivation path for key lookup.
+func (v *Vault) RefreshFeeUTXOs(ctx context.Context, address, pubKeyHex string, chain, derivIdx uint32) error {
 	if v.Chain == nil {
 		return fmt.Errorf("vault: no blockchain service configured")
 	}
@@ -527,6 +533,8 @@ func (v *Vault) RefreshFeeUTXOs(ctx context.Context, address, pubKeyHex string) 
 				ScriptPubKey: u.ScriptPubKey,
 				PubKeyHex:    pubKeyHex,
 				Type:         "fee",
+				FeeChain:     chain,
+				FeeDerivIdx:  derivIdx,
 			})
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,6 +36,16 @@ func loadWalletState(path string) (*wallet.WalletState, error) {
 		return nil, fmt.Errorf("parse wallet state: %w", err)
 	}
 	return &state, nil
+}
+
+// saveWalletState persists wallet state (indices, vaults) to disk.
+func (v *Vault) saveWalletState() error {
+	statePath := filepath.Join(v.DataDir, "state.json")
+	data, err := json.MarshalIndent(v.WState, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal wallet state: %w", err)
+	}
+	return os.WriteFile(statePath, data, 0600)
 }
 
 // pubKeyHash computes HASH160(pubkey) = RIPEMD160(SHA256(pubkey)).

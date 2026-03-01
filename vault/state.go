@@ -138,9 +138,19 @@ func (s *LocalState) Reload() error {
 }
 
 // Save persists the local state to disk.
+// Spent UTXOs are pruned before writing to prevent unbounded growth.
 func (s *LocalState) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Prune spent UTXOs to prevent unbounded growth.
+	live := make([]*UTXOState, 0, len(s.UTXOs))
+	for _, u := range s.UTXOs {
+		if !u.Spent {
+			live = append(live, u)
+		}
+	}
+	s.UTXOs = live
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -214,6 +224,8 @@ func (s *LocalState) FindUTXOByPubKey(pubKeyHex, utxoType string) *UTXOState {
 }
 
 // GetNode returns the node state for a given pubkey hex.
+// Note: the returned pointer escapes the mutex. Callers that mutate the
+// returned node must do so within withWriteLock to ensure consistency.
 func (s *LocalState) GetNode(pubKeyHex string) *NodeState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -228,6 +240,8 @@ func (s *LocalState) SetNode(pubKeyHex string, node *NodeState) {
 }
 
 // FindNodeByPath returns the node at the given filesystem path.
+// Note: the returned pointer escapes the mutex. Callers that mutate the
+// returned node must do so within withWriteLock to ensure consistency.
 func (s *LocalState) FindNodeByPath(path string) *NodeState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
