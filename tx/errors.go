@@ -26,4 +26,7 @@ var (
 
 	// ErrNotMetanetTx indicates the transaction is not a valid Metanet transaction.
 	ErrNotMetanetTx = errors.New("tx: not a Metanet transaction")
+
+	// ErrInvalidParams indicates invalid parameters were provided.
+	ErrInvalidParams = errors.New("tx: invalid parameters")
 )

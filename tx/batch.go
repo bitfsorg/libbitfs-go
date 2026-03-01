@@ -149,7 +149,15 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 			numNodeInputs++
 		}
 	}
-	numInputs := numNodeInputs + len(b.feeInputs)
+	// Count fee inputs that don't overlap with node inputs.
+	numFeeOnly := 0
+	for _, fi := range b.feeInputs {
+		key := utxoKey{hex.EncodeToString(fi.TxID), fi.Vout}
+		if !seenInputs[key] {
+			numFeeOnly++
+		}
+	}
+	numInputs := numNodeInputs + numFeeOnly
 	// Count outputs: 2 per non-delete op (OP_RETURN + P2PKH), 1 per delete op (OP_RETURN only), + 1 change.
 	numDeleteOps := 0
 	for _, op := range b.ops {
@@ -170,7 +178,7 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 	baseEstimate := EstimateTxSize(numInputs, numOutputs, totalPayloadSize)
 	estFee := EstimateFee(baseEstimate, feeRate)
 
-	// Calculate total available funds (deduped node inputs + fee inputs).
+	// Calculate total available funds (deduped node inputs + deduped fee inputs).
 	totalAvailable := uint64(0)
 	seenFunds := make(map[utxoKey]bool)
 	for _, op := range b.ops {
@@ -184,6 +192,11 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		}
 	}
 	for _, fi := range b.feeInputs {
+		key := utxoKey{hex.EncodeToString(fi.TxID), fi.Vout}
+		if seenFunds[key] {
+			continue // Fee input overlaps with a node input; skip to avoid double-counting.
+		}
+		seenFunds[key] = true
 		totalAvailable += fi.Amount
 	}
 
@@ -223,8 +236,13 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		})
 	}
 
-	// Then: fee inputs.
+	// Then: fee inputs (deduped against node inputs to prevent double-spend).
 	for _, fi := range b.feeInputs {
+		key := utxoKey{hex.EncodeToString(fi.TxID), fi.Vout}
+		if addedInputs[key] {
+			continue // Already added as a node input.
+		}
+		addedInputs[key] = true
 		feeHash, err := chainhash.NewHash(fi.TxID)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid fee UTXO TxID: %w", ErrScriptBuild, err)
@@ -298,13 +316,15 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%w: change lock script: %w", ErrScriptBuild, err)
 			}
-		} else {
-			// Fall back to first op's node key as change destination.
+		} else if len(b.ops) == 1 {
+			// Single-op batch: fall back to the op's node key as change destination.
 			firstNodeScript, err := BuildP2PKHScript(b.ops[0].PubKey)
 			if err != nil {
 				return nil, fmt.Errorf("%w: fallback change script: %w", ErrScriptBuild, err)
 			}
 			changeLockScript = script.NewFromBytes(firstNodeScript)
+		} else {
+			return nil, fmt.Errorf("%w: change address required for multi-op batch", ErrInvalidParams)
 		}
 		sdkTx.Outputs = append(sdkTx.Outputs, &transaction.TransactionOutput{
 			Satoshis:      changeAmount,
@@ -356,8 +376,15 @@ func (b *MutationBatch) Sign(result *BatchResult) (string, error) {
 		signingUTXOs = append(signingUTXOs, op.InputUTXO)
 	}
 
-	// 2. Fee inputs.
-	signingUTXOs = append(signingUTXOs, b.feeInputs...)
+	// 2. Fee inputs (deduped against node inputs, matching Build).
+	for _, fi := range b.feeInputs {
+		key := utxoKey{hex.EncodeToString(fi.TxID), fi.Vout}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		signingUTXOs = append(signingUTXOs, fi)
+	}
 
 	// Sign via SignMetanetTx.
 	mtx := &MetanetTx{RawTx: result.RawTx}

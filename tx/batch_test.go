@@ -2,6 +2,7 @@ package tx
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -68,6 +69,7 @@ func TestMutationBatch_ParentUpdatePlusChildCreate(t *testing.T) {
 	})
 
 	batch.AddFeeInput(testFeeUTXO(t, 100000))
+	batch.SetChange(bytes.Repeat([]byte{0xcc}, 20))
 
 	result, err := batch.Build()
 	require.NoError(t, err)
@@ -102,6 +104,7 @@ func TestMutationBatch_MultipleCreates(t *testing.T) {
 	}
 
 	batch.AddFeeInput(testFeeUTXO(t, 100000))
+	batch.SetChange(bytes.Repeat([]byte{0xdd}, 20))
 
 	result, err := batch.Build()
 	require.NoError(t, err)
@@ -339,6 +342,7 @@ func TestMutationBatch_ParentDedup(t *testing.T) {
 	})
 
 	batch.AddFeeInput(testFeeUTXO(t, 5000))
+	batch.SetChange(bytes.Repeat([]byte{0xee}, 20))
 	result, err := batch.Build()
 	require.NoError(t, err)
 
@@ -430,6 +434,7 @@ func TestMutationBatch_Sign_MultiOp_WithDedup(t *testing.T) {
 		TxID: bytes.Repeat([]byte{0x02}, 32), Vout: 0, Amount: 5000,
 		ScriptPubKey: feeScript, PrivateKey: feePriv,
 	})
+	batch.SetChange(bytes.Repeat([]byte{0xff}, 20))
 
 	result, err := batch.Build()
 	require.NoError(t, err)
@@ -444,6 +449,61 @@ func TestMutationBatch_Sign_MultiOp_WithDedup(t *testing.T) {
 	if result.ChangeUTXO != nil {
 		assert.NotNil(t, result.ChangeUTXO.TxID)
 	}
+}
+
+func TestMutationBatch_FeeInputDedup(t *testing.T) {
+	// Fee input that overlaps with a node input should be deduped.
+	priv, pub := generateTestKeyPair(t)
+	sharedTxID := bytes.Repeat([]byte{0x01}, 32)
+
+	nodeUTXO := &UTXO{TxID: sharedTxID, Vout: 1, Amount: 10000}
+
+	batch := NewMutationBatch()
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpUpdate,
+		PubKey:     pub,
+		ParentTxID: bytes.Repeat([]byte{0xaa}, 32),
+		Payload:    []byte("payload"),
+		InputUTXO:  nodeUTXO,
+		PrivateKey: priv,
+	})
+	// Add the same UTXO as a fee input — should be deduped.
+	batch.AddFeeInput(&UTXO{TxID: sharedTxID, Vout: 1, Amount: 10000})
+
+	result, err := batch.Build()
+	require.NoError(t, err)
+
+	sdkTx, err := transaction.NewTransactionFromBytes(result.RawTx)
+	require.NoError(t, err)
+	assert.Len(t, sdkTx.Inputs, 1, "overlapping fee input should be deduped to one input")
+}
+
+func TestEstimateFee_OverflowSaturation(t *testing.T) {
+	// Very large size * feeRate should saturate to MaxUint64.
+	result := EstimateFee(1<<62, 100)
+	assert.Equal(t, uint64(math.MaxUint64), result)
+}
+
+func TestMutationBatch_MultiOpMissingChangeAddr(t *testing.T) {
+	// Multi-op batch without change address should error.
+	_, pub1 := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	batch := NewMutationBatch()
+	batch.AddNodeOp(BatchNodeOp{
+		Type:    OpCreate,
+		PubKey:  pub1,
+		Payload: []byte("payload1"),
+	})
+	batch.AddNodeOp(BatchNodeOp{
+		Type:    OpCreate,
+		PubKey:  pub2,
+		Payload: []byte("payload2"),
+	})
+	batch.AddFeeInput(testFeeUTXO(t, 100000))
+
+	_, err := batch.Build()
+	assert.ErrorIs(t, err, ErrInvalidParams)
 }
 
 func TestMutationBatch_ConvenienceBuilders(t *testing.T) {

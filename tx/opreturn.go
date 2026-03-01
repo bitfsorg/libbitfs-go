@@ -3,6 +3,7 @@ package tx
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
@@ -200,18 +201,26 @@ func parseMetanetOPReturn(scriptBytes []byte) ([][]byte, bool) {
 }
 
 // EstimateFee estimates the transaction fee for a given size and fee rate.
-// Returns ceil(txSizeBytes * feeRate / 1000).
+// Returns ceil(txSizeBytes * feeRate / 1000). Saturates to math.MaxUint64 on overflow.
 func EstimateFee(txSizeBytes int, feeRate uint64) uint64 {
 	if feeRate == 0 {
 		feeRate = DefaultFeeRate
 	}
-	fee := uint64(txSizeBytes) * feeRate
+	size := uint64(txSizeBytes)
+	if size > math.MaxUint64/feeRate {
+		return math.MaxUint64 // Saturate on overflow.
+	}
+	fee := size * feeRate
 	// Ceiling division by 1000
 	return (fee + 999) / 1000
 }
 
 // EstimateTxSize provides a rough estimate of transaction size in bytes.
 // This is a simplified estimate based on typical Metanet transaction structure.
+// For multi-op batches, callers pass the sum of all payloads as payloadSize.
+// This slightly overestimates by treating all payload as one OP_RETURN instead
+// of N separate ones (misses N-1 output overhead bytes), but the overestimate
+// is acceptable for fee estimation since it errs on the side of paying more fee.
 func EstimateTxSize(numInputs, numOutputs int, payloadSize int) int {
 	// Base: version(4) + locktime(4) + input count varint(1) + output count varint(1) = 10
 	// Per input: prevhash(32) + previndex(4) + scriptlen varint(1) + script(~107 for P2PKH) + sequence(4) = 148
