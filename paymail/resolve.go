@@ -57,6 +57,14 @@ const (
 	capPublicProfileFull = "f12f968c92d6"
 )
 
+// validateCapabilityHost checks that a capability URL's host matches the original
+// domain or is a subdomain of it. This prevents SSRF via server-controlled URL templates.
+func validateCapabilityHost(capHost, originalDomain string) bool {
+	capHost = strings.ToLower(capHost)
+	originalDomain = strings.ToLower(originalDomain)
+	return capHost == originalDomain || strings.HasSuffix(capHost, "."+originalDomain)
+}
+
 // DiscoverCapabilities fetches .well-known/bsvalias from a domain
 // and returns the Paymail server capabilities.
 func DiscoverCapabilities(domain string) (*PaymailCapabilities, error) {
@@ -92,7 +100,8 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 
 	caps := &PaymailCapabilities{}
 
-	// Extract capability URLs from the capabilities map
+	// Extract capability URLs from the capabilities map.
+	// Validate each URL host matches the original domain to prevent SSRF.
 	for key, val := range wk.Capabilities {
 		urlStr, ok := val.(string)
 		if !ok {
@@ -103,14 +112,21 @@ func DiscoverCapabilitiesWithClient(domain string, client HTTPClient) (*PaymailC
 		if err != nil || parsed.Scheme != "https" {
 			continue
 		}
-		switch {
-		case key == capPKI || key == capPKIFull || strings.Contains(key, "pki"):
+		// SSRF mitigation: capability URL host must match the original domain
+		// or be a subdomain of it.
+		if !validateCapabilityHost(parsed.Hostname(), domain) {
+			continue
+		}
+		// Use exact key matching to prevent false positives
+		// (e.g., "custom-spki" should not match "pki").
+		switch key {
+		case capPKI, capPKIFull:
 			caps.PKI = urlStr
-		case key == capPublicProfile || key == capPublicProfileFull || strings.Contains(key, "public-profile"):
+		case capPublicProfile: // also matches capPublicProfileFull (same BRFC ID)
 			caps.PublicProfile = urlStr
-		case key == capVerifyPubKey || strings.Contains(key, "verify-pubkey"):
+		case capVerifyPubKey:
 			caps.VerifyPubKey = urlStr
-		case key == capPaymentDestination || strings.Contains(key, "paymentDestination"):
+		case capPaymentDestination:
 			caps.PaymentDestination = urlStr
 		}
 	}

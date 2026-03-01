@@ -150,17 +150,21 @@ func TestResolveURIWith_DNSLinkPubKeyFailure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DiscoverCapabilities — capability matching via 'contains' keywords
+// DiscoverCapabilities — exact capability key matching (no substring matching)
 // ---------------------------------------------------------------------------
 
-func TestDiscoverCapabilities_ContainsKeywordMatch(t *testing.T) {
+func TestDiscoverCapabilities_ExactKeyMatch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]interface{}{
 			"bsvalias": "1.0",
 			"capabilities": map[string]interface{}{
+				// Non-standard keys should NOT match (prevents "custom-spki" → "pki" false positive).
 				"some-pki-endpoint":            "https://example.com/pki/{alias}@{domain.tld}",
 				"public-profile-v2":            "https://example.com/profile/{alias}@{domain.tld}",
 				"verify-pubkey-implementation": "https://example.com/verify/{alias}@{domain.tld}",
+				// Standard keys SHOULD match.
+				"pki":          "https://example.com/standard-pki/{alias}@{domain.tld}",
+				"a9f510c16bde": "https://example.com/standard-verify/{alias}@{domain.tld}",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -171,9 +175,12 @@ func TestDiscoverCapabilities_ContainsKeywordMatch(t *testing.T) {
 	client := &mockHTTPClient{server: server}
 	caps, err := DiscoverCapabilitiesWithClient("example.com", client)
 	require.NoError(t, err)
-	assert.NotEmpty(t, caps.PKI, "should match 'pki' keyword")
-	assert.NotEmpty(t, caps.PublicProfile, "should match 'public-profile' keyword")
-	assert.NotEmpty(t, caps.VerifyPubKey, "should match 'verify-pubkey' keyword")
+	// Exact key matches should work.
+	assert.Contains(t, caps.PKI, "standard-pki", "exact 'pki' key should match")
+	assert.Contains(t, caps.VerifyPubKey, "standard-verify", "exact BRFC key should match")
+	// Substring matches should NOT work — non-standard keys are ignored.
+	assert.NotContains(t, caps.PKI, "/pki/{alias}@", "non-standard 'some-pki-endpoint' key should not match")
+	assert.Empty(t, caps.PublicProfile, "non-standard 'public-profile-v2' key should not match")
 }
 
 // ---------------------------------------------------------------------------
