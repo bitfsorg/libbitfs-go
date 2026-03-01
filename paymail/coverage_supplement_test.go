@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -254,6 +255,132 @@ func TestResolveDNSLinkPubKey_MultipleRecords_FirstValidWins(t *testing.T) {
 
 	expected, _ := hex.DecodeString(testPubKeyHex)
 	assert.Equal(t, expected, pubKey, "should use first non-empty record")
+}
+
+// ---------------------------------------------------------------------------
+// validateCapabilityHost — SSRF mitigation unit tests (R09-H1)
+// ---------------------------------------------------------------------------
+
+func TestValidateCapabilityHost(t *testing.T) {
+	tests := []struct {
+		name           string
+		capHost        string
+		originalDomain string
+		want           bool
+	}{
+		// Exact match
+		{"exact match", "example.com", "example.com", true},
+		{"exact match case insensitive", "Example.COM", "example.com", true},
+
+		// Subdomain match
+		{"subdomain match", "api.example.com", "example.com", true},
+		{"deep subdomain match", "a.b.c.example.com", "example.com", true},
+		{"subdomain case insensitive", "API.Example.COM", "example.com", true},
+
+		// Rejections — different domain
+		{"different domain", "evil.com", "example.com", false},
+		{"similar suffix not subdomain", "notexample.com", "example.com", false},
+		{"suffix attack", "malicious-example.com", "example.com", false},
+
+		// Internal network targets (SSRF vectors)
+		{"localhost", "localhost", "example.com", false},
+		{"127.0.0.1", "127.0.0.1", "example.com", false},
+		{"169.254 link-local", "169.254.169.254", "example.com", false},
+		{"internal hostname", "internal.corp", "example.com", false},
+
+		// Edge cases
+		{"empty capHost", "", "example.com", false},
+		{"empty originalDomain", "example.com", "", false},
+		{"both empty", "", "", true}, // "" == "" is true (degenerate case)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := validateCapabilityHost(tt.capHost, tt.originalDomain)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DiscoverCapabilities — SSRF domain mismatch rejection (R09-H1)
+// ---------------------------------------------------------------------------
+
+func TestDiscoverCapabilities_RejectsSSRFDomainMismatch(t *testing.T) {
+	// Server returns capability URLs pointing to a different domain.
+	// These should be silently dropped by SSRF validation.
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki":          "https://evil.attacker.com/pki/{alias}@{domain.tld}",
+						"f12f968c92d6": "https://internal.corp/profile/{alias}@{domain.tld}",
+						"a9f510c16bde": "https://169.254.169.254/verify/{alias}@{domain.tld}",
+						"2a40af698840": "https://localhost:8080/pay/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+	}
+
+	caps, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	require.NoError(t, err, "SSRF mismatch should not cause an error, just skip")
+	assert.Empty(t, caps.PKI, "PKI URL on evil.attacker.com should be rejected")
+	assert.Empty(t, caps.PublicProfile, "profile URL on internal.corp should be rejected")
+	assert.Empty(t, caps.VerifyPubKey, "verify URL on 169.254.169.254 should be rejected")
+	assert.Empty(t, caps.PaymentDestination, "payment URL on localhost should be rejected")
+}
+
+func TestDiscoverCapabilities_AcceptsSubdomainURLs(t *testing.T) {
+	// Server returns capability URLs on subdomains of the original domain.
+	// These should be accepted.
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki":          "https://api.example.com/pki/{alias}@{domain.tld}",
+						"f12f968c92d6": "https://cdn.example.com/profile/{alias}@{domain.tld}",
+						"2a40af698840": "https://pay.api.example.com/dest/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+	}
+
+	caps, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	require.NoError(t, err)
+	assert.NotEmpty(t, caps.PKI, "subdomain api.example.com should be accepted")
+	assert.NotEmpty(t, caps.PublicProfile, "subdomain cdn.example.com should be accepted")
+	assert.NotEmpty(t, caps.PaymentDestination, "deep subdomain pay.api.example.com should be accepted")
+}
+
+func TestDiscoverCapabilities_RejectsSuffixAttack(t *testing.T) {
+	// Server returns a capability URL whose domain ends with the original domain
+	// but is NOT a subdomain (e.g., "notexample.com" ends with "example.com"
+	// but is not a subdomain of it).
+	mock := &responseMockHTTPClient{
+		responses: map[string]*http.Response{
+			"https://example.com/.well-known/bsvalias": {
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{
+					"bsvalias": "1.0",
+					"capabilities": {
+						"pki": "https://notexample.com/pki/{alias}@{domain.tld}"
+					}
+				}`)),
+			},
+		},
+	}
+
+	caps, err := DiscoverCapabilitiesWithClient("example.com", mock)
+	require.NoError(t, err)
+	assert.Empty(t, caps.PKI, "notexample.com is not a subdomain of example.com")
 }
 
 // ---------------------------------------------------------------------------
