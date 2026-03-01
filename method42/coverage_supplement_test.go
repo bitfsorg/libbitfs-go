@@ -24,7 +24,7 @@ func genKP(t *testing.T) (*ec.PrivateKey, *ec.PublicKey) {
 func TestAesGCMEncrypt_InvalidKeyLength(t *testing.T) {
 	_, err := aesGCMEncrypt([]byte("hello"), make([]byte, 15), nil)
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrDecryptionFailed)
+	assert.Contains(t, err.Error(), "AES cipher creation failed")
 }
 
 func TestAesGCMDecrypt_InvalidKeyLength(t *testing.T) {
@@ -146,8 +146,18 @@ func TestDecrypt_TamperedCiphertextAllModes(t *testing.T) {
 func TestDecryptWithCapsule_BadKeyHashLen(t *testing.T) {
 	buyerPriv, _ := genKP(t)
 	_, nodePub := genKP(t)
-	_, err := DecryptWithCapsule(make([]byte, 64), []byte("capsule"), make([]byte, 16), buyerPriv, nodePub)
+	// keyHash must be 32 bytes; 16 bytes should fail validation.
+	_, err := DecryptWithCapsule(make([]byte, 64), make([]byte, 32), make([]byte, 16), buyerPriv, nodePub)
 	assert.ErrorIs(t, err, ErrKeyHashMismatch)
+}
+
+func TestDecryptWithCapsule_BadCapsuleLen(t *testing.T) {
+	buyerPriv, _ := genKP(t)
+	_, nodePub := genKP(t)
+	// capsule must be 32 bytes
+	_, err := DecryptWithCapsule(make([]byte, 64), []byte("capsule"), make([]byte, 32), buyerPriv, nodePub)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "capsule must be 32 bytes")
 }
 
 func TestDecryptWithCapsule_NilBuyerKey(t *testing.T) {

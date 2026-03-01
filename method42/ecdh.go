@@ -99,6 +99,9 @@ func ComputeCapsule(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey,
 // When nonce is nil, this is equivalent to ComputeCapsule (legacy behavior).
 func ComputeCapsuleWithNonce(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.PublicKey,
 	buyerPublicKey *ec.PublicKey, keyHash []byte, nonce []byte) ([]byte, error) {
+	if len(keyHash) != 32 {
+		return nil, fmt.Errorf("method42: keyHash must be 32 bytes, got %d", len(keyHash))
+	}
 	// 1. sharedNode = ECDH(D_node, P_node)
 	sharedNode, err := ECDH(nodePrivateKey, nodePublicKey)
 	if err != nil {
@@ -128,13 +131,13 @@ func ComputeCapsuleWithNonce(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.Pu
 }
 
 // xorBytes XORs two byte slices of equal length.
+// Panics if lengths differ (all callers guarantee equal-length inputs).
 func xorBytes(a, b []byte) []byte {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
+	if len(a) != len(b) {
+		panic("method42: xorBytes called with mismatched lengths")
 	}
-	out := make([]byte, n)
-	for i := 0; i < n; i++ {
+	out := make([]byte, len(a))
+	for i := range a {
 		out[i] = a[i] ^ b[i]
 	}
 	return out
@@ -150,6 +153,9 @@ func xorBytes(a, b []byte) []byte {
 // claim the payment, and the buyer can then use the capsule to derive the
 // decryption key.
 func ComputeCapsuleHash(fileTxID, capsule []byte) []byte {
+	if len(fileTxID) != 32 {
+		return nil
+	}
 	h := sha256.New()
 	h.Write(fileTxID)
 	h.Write(capsule)

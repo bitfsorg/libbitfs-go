@@ -25,6 +25,9 @@ func GenerateRabinKey(bitSize int) (*RabinKeyPair, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generating q: %w", err)
 	}
+	if p.Cmp(q) == 0 {
+		return nil, fmt.Errorf("method42: generated identical primes (retry)")
+	}
 	n := new(big.Int).Mul(p, q)
 	return &RabinKeyPair{P: p, Q: q, N: n}, nil
 }
@@ -44,11 +47,15 @@ func generateBlumPrime(bitSize int) (*big.Int, error) {
 	}
 }
 
+// maxRabinPaddingIterations is the maximum number of padding attempts when
+// searching for a quadratic residue during Rabin signing.
+const maxRabinPaddingIterations = 1_000_000
+
 // RabinSign signs a message using the Rabin signature scheme.
 // Returns (S, U) where S is the signature and U is the padding.
 func RabinSign(key *RabinKeyPair, message []byte) (*big.Int, []byte, error) {
 	// Find padding U such that H(message || U) is a quadratic residue mod n
-	for counter := uint32(0); ; counter++ {
+	for counter := uint32(0); counter < maxRabinPaddingIterations; counter++ {
 		pad := make([]byte, 4)
 		binary.BigEndian.PutUint32(pad, counter)
 
@@ -67,6 +74,7 @@ func RabinSign(key *RabinKeyPair, message []byte) (*big.Int, []byte, error) {
 		sig := crt(sp, sq, key.P, key.Q, key.N)
 		return sig, pad, nil
 	}
+	return nil, nil, fmt.Errorf("method42: rabin sign failed after %d padding iterations", maxRabinPaddingIterations)
 }
 
 // RabinVerify verifies a Rabin signature using only the public modulus n.

@@ -231,6 +231,9 @@ func DecryptWithCapsuleNonce(ciphertext []byte, capsule []byte, keyHash []byte,
 	if len(capsule) == 0 {
 		return nil, fmt.Errorf("method42: capsule is empty")
 	}
+	if len(capsule) != AESKeyLen {
+		return nil, fmt.Errorf("method42: capsule must be %d bytes, got %d", AESKeyLen, len(capsule))
+	}
 	if len(keyHash) != 32 {
 		return nil, fmt.Errorf("%w: key hash must be 32 bytes", ErrKeyHashMismatch)
 	}
@@ -359,12 +362,12 @@ func DecryptMetadata(encPayload []byte, privateKey *ec.PrivateKey, publicKey *ec
 func aesGCMEncrypt(plaintext, key, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("%w: AES cipher creation failed: %w", ErrDecryptionFailed, err)
+		return nil, fmt.Errorf("method42: AES cipher creation failed: %w", err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("%w: GCM creation failed: %w", ErrDecryptionFailed, err)
+		return nil, fmt.Errorf("method42: GCM creation failed: %w", err)
 	}
 
 	// Generate random nonce
