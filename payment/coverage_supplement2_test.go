@@ -1,4 +1,4 @@
-package x402
+package payment
 
 import (
 	"net/http"
@@ -183,7 +183,7 @@ func TestSetPaymentHeaders_NilHeaders(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "internal error")
-	// No x402 headers should be set.
+	// No payment headers should be set.
 	assert.Empty(t, w.Header().Get(HeaderPrice))
 	assert.Empty(t, w.Header().Get(HeaderInvoiceID))
 }

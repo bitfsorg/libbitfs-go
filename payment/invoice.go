@@ -1,9 +1,9 @@
-// Package x402 implements the x402 payment protocol for BitFS.
+// Package payment implements the payment protocol for BitFS.
 //
 // It handles HTTP 402 Payment Required responses with structured headers,
 // invoice creation and verification, and HTLC atomic swap integration
 // for content purchases.
-package x402
+package payment
 
 import (
 	"crypto/rand"
@@ -91,7 +91,7 @@ func (inv *Invoice) IsExpired() bool {
 func generateInvoiceID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("x402: CSPRNG failure: %w", err)
+		return "", fmt.Errorf("payment: CSPRNG failure: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

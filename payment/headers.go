@@ -1,4 +1,4 @@
-package x402
+package payment
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// x402 HTTP header names.
+// Payment HTTP header names (HTTP 402 protocol).
 const (
 	HeaderPrice      = "X-Price"
 	HeaderPricePerKB = "X-Price-Per-KB"
@@ -15,7 +15,7 @@ const (
 	HeaderExpiry     = "X-Expiry"
 )
 
-// PaymentHeaders holds the x402 HTTP headers.
+// PaymentHeaders holds the HTTP 402 payment headers.
 type PaymentHeaders struct {
 	Price      uint64
 	PricePerKB uint64
@@ -24,7 +24,7 @@ type PaymentHeaders struct {
 	Expiry     int64
 }
 
-// SetPaymentHeaders sets x402 headers on an HTTP response.
+// SetPaymentHeaders sets payment headers on an HTTP response.
 // Also sets the status code to 402 Payment Required.
 func SetPaymentHeaders(w http.ResponseWriter, headers *PaymentHeaders) {
 	if headers == nil {
@@ -50,7 +50,7 @@ func PaymentHeadersFromInvoice(inv *Invoice) *PaymentHeaders {
 	}
 }
 
-// ParsePaymentHeaders extracts x402 headers from an HTTP response.
+// ParsePaymentHeaders extracts payment headers from an HTTP response.
 func ParsePaymentHeaders(resp *http.Response) (*PaymentHeaders, error) {
 	priceStr := resp.Header.Get(HeaderPrice)
 	if priceStr == "" {

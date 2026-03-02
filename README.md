@@ -16,7 +16,7 @@ Module: `github.com/bitfsorg/libbitfs-go`
 | spv | SPV light client (block headers, Merkle proof verification, PoW validation) |
 | storage | Content-addressed store (SHA256, hash-sharded directories, compression, chunking) |
 | network | Blockchain service interface (BlockchainService, RPCClient, SPVClient, presets) |
-| x402 | HTTP 402 payment protocol (X-Price/X-Invoice-Id headers, HTLC, payment verification) |
+| payment | HTTP 402 payment protocol (X-Price/X-Invoice-Id headers, HTLC, payment verification) |
 | paymail | Paymail protocol (.well-known/bsvalias discovery, PKI endpoint resolution) |
 | revshare | Revenue sharing (registry, distribution algorithm, share conservation) |
 | config | Configuration file parser (key=value format) |

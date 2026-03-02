@@ -1,4 +1,4 @@
-package x402
+package payment
 
 import (
 	"crypto/sha256"
