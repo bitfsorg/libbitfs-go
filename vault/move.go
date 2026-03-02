@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"path"
@@ -304,12 +305,17 @@ func (v *Vault) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*Re
 	}
 
 	allSuccess := false
+	var storedKeyHash []byte // tracks blob written by Store.Put for rollback
 	defer func() {
 		if !allSuccess {
 			dstParentUS.Spent = false
 			srcNodeUS.Spent = false
 			srcParentUS.Spent = false
 			feeUS.Spent = false
+			// Clean up orphaned blob if Store.Put succeeded but move failed (L-NEW-9).
+			if len(storedKeyHash) > 0 {
+				_ = v.Store.Delete(storedKeyHash)
+			}
 		}
 	}()
 
@@ -374,6 +380,7 @@ func (v *Vault) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*Re
 	if err := v.Store.Put(encResult.KeyHash, encResult.Ciphertext); err != nil {
 		return nil, fmt.Errorf("vault: store copy: %w", err)
 	}
+	storedKeyHash = encResult.KeyHash // mark for deferred rollback if allSuccess stays false
 
 	allSuccess = true
 	txIDHex := hex.EncodeToString(result.TxID)
@@ -424,7 +431,11 @@ func (v *Vault) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*Re
 	srcParent.TxID = txIDHex
 
 	// Clean up old encrypted content (best-effort).
-	_ = v.Store.Delete(srcKeyHash)
+	// Skip if old and new key hashes are identical (free-access files with same
+	// plaintext share the same content-addressed hash).
+	if !bytes.Equal(srcKeyHash, encResult.KeyHash) {
+		_ = v.Store.Delete(srcKeyHash)
+	}
 
 	// Track batch UTXOs: [0]=child(create), [1]=delete(nil), [2]=srcParent, [3]=dstParent.
 	v.TrackBatchUTXOs(result, []string{childPubHex, "", srcParent.PubKeyHex, dstParent.PubKeyHex}, changePubHex)

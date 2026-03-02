@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -438,4 +439,98 @@ func TestMove_CrossDirectory_FromRoot(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "'moved_file.txt' should be in /subdir children")
+}
+
+// TestMove_CrossDirectory_BlobCleanup verifies that after a successful cross-directory
+// move, the new blob exists in the store and has new ciphertext content.
+// For free-access files, the key hash is content-addressed (SHA256(SHA256(plaintext))),
+// so old and new key hashes are identical. The old ciphertext is overwritten in-place
+// and the delete is correctly skipped (since deleting would remove the new blob too).
+// The deferred cleanup (L-NEW-9) uses storedKeyHash to roll back Store.Put on failure.
+func TestMove_CrossDirectory_BlobCleanup(t *testing.T) {
+	eng := setupMoveTestEngine(t)
+
+	// Snapshot the source node's KeyHash and ciphertext before move.
+	srcNode := eng.State.FindNodeByPath("/src/file.txt")
+	require.NotNil(t, srcNode)
+	srcKeyHash := srcNode.KeyHash
+	require.NotEmpty(t, srcKeyHash, "source node must have a key hash")
+
+	srcKeyHashBytes, err := hex.DecodeString(srcKeyHash)
+	require.NoError(t, err)
+
+	// Read original ciphertext.
+	origCiphertext, err := eng.Store.Get(srcKeyHashBytes)
+	require.NoError(t, err)
+	require.NotEmpty(t, origCiphertext, "source ciphertext should exist")
+
+	// Execute cross-directory move.
+	_, err = eng.Move(&MoveOpts{
+		VaultIndex: 0,
+		SrcPath:    "/src/file.txt",
+		DstPath:    "/dst/moved.txt",
+		Force:      true,
+	})
+	require.NoError(t, err)
+
+	// Get the moved node's KeyHash.
+	movedNode := eng.State.FindNodeByPath("/dst/moved.txt")
+	require.NotNil(t, movedNode)
+	newKeyHash := movedNode.KeyHash
+	require.NotEmpty(t, newKeyHash, "moved node must have a key hash")
+
+	// For free-access files, key hashes are the same (content-addressed).
+	assert.Equal(t, srcKeyHash, newKeyHash,
+		"free-access files should have same key hash after move (content-addressed)")
+
+	// New blob should exist in store.
+	newKeyHashBytes, err := hex.DecodeString(newKeyHash)
+	require.NoError(t, err)
+	has, err := eng.Store.Has(newKeyHashBytes)
+	require.NoError(t, err)
+	assert.True(t, has, "blob should exist after move")
+
+	// The stored ciphertext should be different from the original (re-encrypted
+	// with a new ECDH key), even though it decrypts to the same plaintext.
+	newCiphertext, err := eng.Store.Get(newKeyHashBytes)
+	require.NoError(t, err)
+	assert.NotEqual(t, origCiphertext, newCiphertext,
+		"ciphertext should change after re-encryption with new node key")
+}
+
+// TestMove_CrossDirectory_FailureNoOrphanBlob verifies that when a cross-directory
+// move fails before Store.Put (e.g. UTXO failure), no orphaned blob is left behind.
+// Combined with the deferred cleanup (L-NEW-9), this ensures no blob leaks on failure.
+func TestMove_CrossDirectory_FailureNoOrphanBlob(t *testing.T) {
+	eng := setupMoveTestEngine(t)
+
+	// Snapshot initial store state: count how many blobs exist.
+	srcNode := eng.State.FindNodeByPath("/src/file.txt")
+	require.NotNil(t, srcNode)
+	srcKeyHashBytes, err := hex.DecodeString(srcNode.KeyHash)
+	require.NoError(t, err)
+
+	// Sabotage dst parent UTXO to make the batch build fail.
+	dstDir := eng.State.FindNodeByPath("/dst")
+	require.NotNil(t, dstDir)
+	for _, u := range eng.State.UTXOs {
+		if u.PubKeyHex == dstDir.PubKeyHex && u.Type == "node" && !u.Spent {
+			u.Spent = true
+		}
+	}
+	require.NoError(t, eng.State.Save())
+
+	// Move should fail.
+	_, err = eng.Move(&MoveOpts{
+		VaultIndex: 0,
+		SrcPath:    "/src/file.txt",
+		DstPath:    "/dst/file.txt",
+		Force:      true,
+	})
+	require.Error(t, err, "move should fail with sabotaged UTXO")
+
+	// Original source blob should still exist (not deleted since move failed).
+	has, err := eng.Store.Has(srcKeyHashBytes)
+	require.NoError(t, err)
+	assert.True(t, has, "source blob should still exist after failed move")
 }
