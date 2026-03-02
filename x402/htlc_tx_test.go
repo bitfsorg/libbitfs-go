@@ -738,7 +738,7 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 }
 
 func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
-	capsule := []byte("the-real-capsule-data!!")
+	capsule := bytes.Repeat([]byte{0xca}, 32)
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32) // mock file txid
 	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
 
@@ -760,7 +760,7 @@ func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wrong capsule — hash won't match what's in the HTLC script.
-	wrongCapsule := []byte("wrong-capsule-data-here!!")
+	wrongCapsule := bytes.Repeat([]byte{0xba}, 32)
 
 	_, err = BuildSellerClaimTx(&SellerClaimParams{
 		SellerPrivKey: sellerPriv,
@@ -777,7 +777,7 @@ func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
 }
 
 func TestParseHTLCPreimage_WithHashVerification(t *testing.T) {
-	capsule := []byte("secret-capsule-data-for-test!!")
+	capsule := bytes.Repeat([]byte{0xca}, 32)
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32) // mock file txid
 	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
 

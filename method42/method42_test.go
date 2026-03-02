@@ -1051,12 +1051,7 @@ func TestReEncrypt_NonceUniqueness(t *testing.T) {
 func TestComputeCapsuleHash_EmptyCapsule(t *testing.T) {
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
 	hash := ComputeCapsuleHash(fileTxID, []byte{})
-	assert.Len(t, hash, 32, "ComputeCapsuleHash of empty capsule should return 32-byte hash")
-
-	// Should be SHA256(fileTxID ‖ empty)
-	expected := sha256.New()
-	expected.Write(fileTxID)
-	assert.Equal(t, expected.Sum(nil), hash)
+	assert.Nil(t, hash, "ComputeCapsuleHash of empty capsule should return nil (capsule must be 32 bytes)")
 }
 
 // =============================================================================

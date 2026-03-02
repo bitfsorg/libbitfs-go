@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // ListDirectory returns the ChildEntry list of a directory node.
@@ -28,7 +30,7 @@ func FindChild(dirNode *Node, name string) (*ChildEntry, bool) {
 		return nil, false
 	}
 	for i := range dirNode.Children {
-		if dirNode.Children[i].Name == name {
+		if dirNode.Children[i].Name == norm.NFC.String(name) {
 			return &dirNode.Children[i], true
 		}
 	}
@@ -47,6 +49,7 @@ func AddChild(dirNode *Node, name string, nodeType NodeType, pubKey []byte, hard
 	if err := validateChildName(name); err != nil {
 		return nil, err
 	}
+	name = norm.NFC.String(name) // Normalize to NFC to prevent Unicode homoglyph duplicates
 	if len(pubKey) != CompressedPubKeyLen {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidPubKey, len(pubKey))
 	}
@@ -116,6 +119,7 @@ func RenameChild(dirNode *Node, oldName, newName string) error {
 	if err := validateChildName(newName); err != nil {
 		return err
 	}
+	newName = norm.NFC.String(newName) // Normalize to NFC
 
 	// Check new name doesn't already exist
 	for _, child := range dirNode.Children {

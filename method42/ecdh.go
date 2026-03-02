@@ -156,6 +156,9 @@ func ComputeCapsuleHash(fileTxID, capsule []byte) []byte {
 	if len(fileTxID) != 32 {
 		return nil
 	}
+	if len(capsule) != 32 {
+		return nil
+	}
 	h := sha256.New()
 	h.Write(fileTxID)
 	h.Write(capsule)
