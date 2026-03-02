@@ -331,8 +331,9 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 			LockingScript: changeLockScript,
 		})
 		changeUTXO = &UTXO{
-			Vout:   vout,
-			Amount: changeAmount,
+			Vout:         vout,
+			Amount:       changeAmount,
+			ScriptPubKey: []byte(*changeLockScript),
 		}
 	}
 
