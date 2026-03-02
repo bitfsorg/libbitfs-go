@@ -29,6 +29,11 @@ const (
 )
 
 // Wallet represents an HD wallet instance for BitFS.
+//
+// Wallet is NOT safe for concurrent use. The go-sdk bip32.ExtendedKey.Child()
+// method may mutate internal state. Callers sharing a Wallet across goroutines
+// must serialize access externally (e.g., through an engine-level mutex).
+// [Audit fix M-12]
 type Wallet struct {
 	masterKey *bip32.ExtendedKey
 	network   *NetworkConfig
@@ -73,6 +78,16 @@ func NewWallet(seed []byte, network *NetworkConfig) (*Wallet, error) {
 // Network returns the wallet's network configuration.
 func (w *Wallet) Network() *NetworkConfig {
 	return w.network
+}
+
+// Close zeroes and nils the master key to minimize the window during which
+// sensitive key material remains in heap memory. After Close, the Wallet
+// must not be used for key derivation.
+func (w *Wallet) Close() {
+	if w.masterKey != nil {
+		w.masterKey.Zero()
+		w.masterKey = nil
+	}
 }
 
 // deriveAccount derives the account-level key: m/44'/236'/account'

@@ -6,9 +6,6 @@ var (
 	// ErrNotDirectory indicates an operation requires a directory but the node is not one.
 	ErrNotDirectory = errors.New("metanet: node is not a directory")
 
-	// ErrNotFile indicates an operation requires a file but the node is not one.
-	ErrNotFile = errors.New("metanet: node is not a file")
-
 	// ErrNotLink indicates an operation requires a link but the node is not one.
 	ErrNotLink = errors.New("metanet: node is not a link")
 
@@ -41,9 +38,6 @@ var (
 
 	// ErrInvalidName indicates a child name is empty or contains path separators.
 	ErrInvalidName = errors.New("metanet: invalid name")
-
-	// ErrAboveRoot indicates a ".." navigation attempted to go above the root.
-	ErrAboveRoot = errors.New("metanet: cannot navigate above root")
 
 	// ErrInvalidPubKey indicates a public key is not 33 bytes (compressed).
 	ErrInvalidPubKey = errors.New("metanet: invalid public key length")

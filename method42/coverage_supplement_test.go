@@ -309,7 +309,8 @@ func TestComputeCapsuleHash_InvalidFileTxIDLength(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ComputeCapsuleHash(tt.fileTxID, capsule)
+			result, err := ComputeCapsuleHash(tt.fileTxID, capsule)
+			assert.Error(t, err, "ComputeCapsuleHash should return error for fileTxID of length %d", len(tt.fileTxID))
 			assert.Nil(t, result, "ComputeCapsuleHash should return nil for fileTxID of length %d", len(tt.fileTxID))
 		})
 	}
@@ -318,7 +319,8 @@ func TestComputeCapsuleHash_InvalidFileTxIDLength(t *testing.T) {
 func TestComputeCapsuleHash_ValidFileTxID(t *testing.T) {
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
 	capsule := bytes.Repeat([]byte{0xab}, 32)
-	result := ComputeCapsuleHash(fileTxID, capsule)
+	result, err := ComputeCapsuleHash(fileTxID, capsule)
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Len(t, result, 32)
 }

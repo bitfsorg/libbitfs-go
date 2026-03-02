@@ -286,7 +286,8 @@ func TestBuildSellerClaimTx(t *testing.T) {
 
 	capsule := bytes.Repeat([]byte{0xde}, 32)
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32) // mock file txid
-	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := method42.ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 	sellerAddr := sellerPriv.PubKey().Hash()
 	changeAddr := sellerPriv.PubKey().Hash()
 
@@ -603,7 +604,8 @@ func TestHTLCRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	fileTxID := bytes.Repeat([]byte{0xf1}, 32) // mock file txid
-	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := method42.ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 
 	// --- Create invoice ---
 	pricePerKB := uint64(50000)
@@ -658,7 +660,8 @@ func TestHTLCRoundTrip(t *testing.T) {
 	assert.Equal(t, capsule, extractedCapsule)
 
 	// Verify hash matches.
-	extractedHash := method42.ComputeCapsuleHash(fileTxID, extractedCapsule)
+	extractedHash, chErr2 := method42.ComputeCapsuleHash(fileTxID, extractedCapsule)
+	require.NoError(t, chErr2)
 	assert.Equal(t, capsuleHash, extractedHash)
 
 	// --- Buyer side: decrypt content using capsule + buyer's private key ---
@@ -740,7 +743,8 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
 	capsule := bytes.Repeat([]byte{0xca}, 32)
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32) // mock file txid
-	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := method42.ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 
 	buyerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
@@ -779,7 +783,8 @@ func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
 func TestParseHTLCPreimage_WithHashVerification(t *testing.T) {
 	capsule := bytes.Repeat([]byte{0xca}, 32)
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32) // mock file txid
-	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := method42.ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 
 	buyerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
@@ -1075,7 +1080,8 @@ func TestHTLCRoundTrip_WithInvoiceID(t *testing.T) {
 
 	capsule := bytes.Repeat([]byte{0xde}, 32)
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
-	capsuleHash := method42.ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := method42.ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 	invoiceID := bytes.Repeat([]byte{0xee}, InvoiceIDLen)
 
 	// Build HTLC with invoice ID.
@@ -1340,6 +1346,154 @@ func TestBuildHTLC_TimeoutBounds(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEmpty(t, script)
 	})
+}
+
+// --- M-4: BuildHTLCFundingTx no-change output fee estimation ---
+
+func TestBuildHTLCFundingTx_NoChangeOutput(t *testing.T) {
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
+	buyerPKH := buyerPriv.PubKey().Hash()
+	p2pkhScript := buildTestP2PKHScript(t, buyerPKH)
+	mockTxID := make([]byte, 32)
+	mockTxID[0] = 0x01
+
+	// Provide exactly enough for HTLC amount + fee without change.
+	// baseTxSize ~= 10 + 148 + (8+1+~135) ~= 302 at 1 sat/byte.
+	// changeOutputSize = 34, so with-change fee ~= 336.
+	// Set surplus between baseFee(302) and withChangeFee(336), e.g. 320.
+	// totalInput(10000) > htlcAmount(9680) + baseFee(302) = 9982 -> OK
+	// totalInput(10000) <= htlcAmount(9680) + withChangeFee(336) = 10016 -> no change
+	htlcAmount := uint64(9680)
+	utxoAmount := uint64(10000) // surplus=320, enough for baseFee but not withChangeFee
+
+	result, err := BuildHTLCFundingTx(&HTLCFundingParams{
+		BuyerPrivKey: buyerPriv,
+		SellerAddr:   sellerPriv.PubKey().Hash(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		CapsuleHash:  capsuleHash,
+		Amount:       htlcAmount,
+		Timeout:      DefaultHTLCTimeout,
+		UTXOs: []*HTLCUTXO{{
+			TxID:         mockTxID,
+			Vout:         0,
+			Amount:       utxoAmount,
+			ScriptPubKey: p2pkhScript,
+		}},
+		ChangeAddr: buyerPKH,
+		FeeRate:    1,
+	})
+	require.NoError(t, err)
+
+	// Parse the resulting tx and verify it has only 1 output (HTLC, no change).
+	tx, parseErr := transaction.NewTransactionFromBytes(result.RawTx)
+	require.NoError(t, parseErr)
+	assert.Len(t, tx.Outputs, 1, "should have only HTLC output when no change")
+	assert.Equal(t, htlcAmount, tx.Outputs[0].Satoshis)
+}
+
+// --- M-5: BuildBuyerRefundTx FundingAmount validation ---
+
+func TestBuildBuyerRefundTx_ZeroFundingAmount(t *testing.T) {
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
+	htlcScript, err := BuildHTLC(&HTLCParams{
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		SellerAddr:   sellerPriv.PubKey().Hash(),
+		CapsuleHash:  capsuleHash,
+		Amount:       1000,
+		Timeout:      DefaultHTLCTimeout,
+	})
+	require.NoError(t, err)
+
+	// Build a pre-signed refund tx with valid funding amount.
+	mockTxID := make([]byte, 32)
+	mockTxID[0] = 0x01
+	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+		FundingTxID:     mockTxID,
+		FundingVout:     0,
+		FundingAmount:   1000,
+		HTLCScript:      htlcScript,
+		SellerPrivKey:   sellerPriv,
+		BuyerOutputAddr: buyerPriv.PubKey().Hash(),
+		Timeout:         DefaultHTLCTimeout,
+		FeeRate:         1,
+	})
+	require.NoError(t, err)
+
+	// Attempt to build buyer refund with zero FundingAmount.
+	_, err = BuildBuyerRefundTx(&BuyerRefundParams{
+		SellerPreSignedTx: preSign.TxBytes,
+		SellerSig:         preSign.SellerSig,
+		HTLCScript:        htlcScript,
+		FundingAmount:     0,
+		BuyerPrivKey:      buyerPriv,
+		FundingTxID:       mockTxID,
+		FundingVout:       0,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidParams)
+	assert.Contains(t, err.Error(), "funding amount must be greater than zero")
+}
+
+func TestBuildBuyerRefundTx_FundingAmountMismatch(t *testing.T) {
+	buyerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	sellerPriv, err := ec.NewPrivateKey()
+	require.NoError(t, err)
+
+	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
+	htlcScript, err := BuildHTLC(&HTLCParams{
+		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
+		SellerPubKey: sellerPriv.PubKey().Compressed(),
+		SellerAddr:   sellerPriv.PubKey().Hash(),
+		CapsuleHash:  capsuleHash,
+		Amount:       1000,
+		Timeout:      DefaultHTLCTimeout,
+	})
+	require.NoError(t, err)
+
+	// Build a pre-signed refund tx with FundingAmount=1000.
+	mockTxID := make([]byte, 32)
+	mockTxID[0] = 0x01
+	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
+		FundingTxID:     mockTxID,
+		FundingVout:     0,
+		FundingAmount:   1000,
+		HTLCScript:      htlcScript,
+		SellerPrivKey:   sellerPriv,
+		BuyerOutputAddr: buyerPriv.PubKey().Hash(),
+		Timeout:         DefaultHTLCTimeout,
+		FeeRate:         1,
+	})
+	require.NoError(t, err)
+
+	// Attempt with FundingAmount that is too low (less than the refund output).
+	// The pre-signed tx output should be ~800 sats (1000 - fee~200).
+	// So a FundingAmount of 500 should fail the cross-validation.
+	_, err = BuildBuyerRefundTx(&BuyerRefundParams{
+		SellerPreSignedTx: preSign.TxBytes,
+		SellerSig:         preSign.SellerSig,
+		HTLCScript:        htlcScript,
+		FundingAmount:     500,
+		BuyerPrivKey:      buyerPriv,
+		FundingTxID:       mockTxID,
+		FundingVout:       0,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFundingAmountMismatch)
 }
 
 // buildTestP2PKHScript creates a P2PKH locking script for testing.

@@ -11,6 +11,10 @@ import (
 // FileStore implements Store using the local filesystem.
 // Files are stored at: {baseDir}/{hex(keyHash[:1])}/{hex(keyHash)}
 // The first byte (2 hex chars) is used as a subdirectory for sharding.
+//
+// The global RWMutex serializes all Put operations across shards. For higher
+// throughput, consider per-shard mutexes ([256]sync.RWMutex keyed on
+// keyHash[0]). [Audit note L-7]
 type FileStore struct {
 	baseDir string
 	mu      sync.RWMutex

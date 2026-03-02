@@ -12,8 +12,11 @@ import (
 	"github.com/bitfsorg/libbitfs-go/spv"
 )
 
-// Compile-time interface check.
-var _ BlockchainService = (*RPCClient)(nil)
+// Compile-time interface checks.
+var (
+	_ BlockchainService = (*RPCClient)(nil)
+	_ BlockHashProvider = (*RPCClient)(nil)
+)
 
 // btcToSat converts a BTC float64 amount (as returned by the RPC node) to satoshis.
 // It uses math.Round to avoid floating-point truncation issues.
@@ -438,6 +441,17 @@ func (c *RPCClient) ImportAddress(ctx context.Context, address string) error {
 		return fmt.Errorf("importaddress: %w", err)
 	}
 	return nil
+}
+
+// GetBlockHash returns the block hash (display hex) at the given height.
+// It calls `getblockhash height` which returns a hex-encoded block hash string.
+// This satisfies the BlockHashProvider interface.
+func (c *RPCClient) GetBlockHash(ctx context.Context, height uint64) (string, error) {
+	var hash string
+	if err := c.Call(ctx, "getblockhash", []interface{}{height}, &hash); err != nil {
+		return "", err
+	}
+	return hash, nil
 }
 
 // GetBestBlockHeight returns the height of the current chain tip.

@@ -3,6 +3,7 @@ package metanet
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 
 	"github.com/bitfsorg/libbitfs-go/tx"
 )
@@ -397,8 +398,18 @@ func appendBytesField(buf []byte, tag byte, data []byte) []byte {
 }
 
 func serializeMetadata(m map[string]string) []byte {
+	// Sort keys for deterministic serialization. Without sorting, Go map
+	// iteration order is random, making the output non-reproducible across
+	// calls — problematic for signing or hashing the payload.
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var buf []byte
-	for k, v := range m {
+	for _, k := range keys {
+		v := m[k]
 		kb := []byte(k)
 		vb := []byte(v)
 		kLen := make([]byte, 2)

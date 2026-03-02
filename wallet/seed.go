@@ -9,11 +9,23 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/compat/bip39"
 	"golang.org/x/crypto/argon2"
 )
+
+// ErrEmptyPassword indicates an empty password was provided for seed encryption.
+var ErrEmptyPassword = fmt.Errorf("wallet: password must not be empty")
+
+// zeroize overwrites a byte slice with zeros to minimize the window during which
+// sensitive key material remains in heap memory.
+func zeroize(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
 
 const (
 	// Mnemonic entropy sizes.
@@ -84,6 +96,9 @@ func EncryptSeed(seed []byte, password string) ([]byte, error) {
 	if len(seed) == 0 {
 		return nil, ErrInvalidSeed
 	}
+	if len(password) == 0 {
+		return nil, ErrEmptyPassword
+	}
 
 	// Generate random salt for Argon2id
 	salt := make([]byte, SaltLen)
@@ -100,15 +115,18 @@ func EncryptSeed(seed []byte, password string) ([]byte, error) {
 		Argon2Parallelism,
 		Argon2KeyLen,
 	)
+	defer zeroize(derivedKey)
 
 	// Compute checksum: SHA256(seed)[:4]
 	seedHash := sha256.Sum256(seed)
+	defer zeroize(seedHash[:])
 	checksum := seedHash[:ChecksumLen]
 
 	// Prepare plaintext: seed || checksum
 	plaintext := make([]byte, len(seed)+ChecksumLen)
 	copy(plaintext, seed)
 	copy(plaintext[len(seed):], checksum)
+	defer zeroize(plaintext)
 
 	// AES-256-GCM encryption
 	block, err := aes.NewCipher(derivedKey)
@@ -163,6 +181,7 @@ func DecryptSeed(encrypted []byte, password string) ([]byte, error) {
 		Argon2Parallelism,
 		Argon2KeyLen,
 	)
+	defer zeroize(derivedKey)
 
 	// AES-256-GCM decryption
 	block, err := aes.NewCipher(derivedKey)
@@ -188,14 +207,12 @@ func DecryptSeed(encrypted []byte, password string) ([]byte, error) {
 	seed := plaintext[:len(plaintext)-ChecksumLen]
 	storedChecksum := plaintext[len(plaintext)-ChecksumLen:]
 
-	// Verify checksum
+	// Verify checksum using constant-time comparison to prevent timing side-channel
 	seedHash := sha256.Sum256(seed)
 	expectedChecksum := seedHash[:ChecksumLen]
 
-	for i := 0; i < ChecksumLen; i++ {
-		if storedChecksum[i] != expectedChecksum[i] {
-			return nil, ErrChecksumMismatch
-		}
+	if subtle.ConstantTimeCompare(storedChecksum, expectedChecksum) != 1 {
+		return nil, ErrChecksumMismatch
 	}
 
 	return seed, nil

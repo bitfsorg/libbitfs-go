@@ -17,6 +17,11 @@ const MaxContentResponseSize = 1 << 30
 // ContentResolver fetches encrypted content by key_hash from multiple sources
 // in priority order: local FileStore -> daemon HTTP endpoints.
 // It returns ciphertext only; the caller is responsible for decryption.
+//
+// ContentResolver is NOT safe for concurrent mutation of its fields (Store,
+// Endpoints, Client). Configure these before first use and do not modify them
+// while Fetch is being called from other goroutines. Concurrent Fetch calls
+// are safe if the fields are not being modified. [Audit fix L-8]
 type ContentResolver struct {
 	Store     *FileStore   // local content-addressed storage
 	Endpoints []string     // daemon/CDN base URLs (e.g. "http://localhost:8080")

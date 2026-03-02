@@ -30,6 +30,9 @@ func (d *defaultDNSResolver) LookupTXT(name string) ([]string, error) {
 }
 
 // DefaultDNSResolver is the production DNS resolver using the net package.
+// This global is NOT safe for concurrent mutation. Prefer passing a resolver
+// explicitly via the *WithResolver variants. Only modify at init time.
+// [Audit fix M-15]
 var DefaultDNSResolver DNSResolver = &defaultDNSResolver{}
 
 // SRV record types for BitFS.

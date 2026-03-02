@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-sdk/script"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +17,7 @@ func buildTestOPReturnOutput(t *testing.T, pNodeBytes []byte, parentTxID []byte,
 	s := &script.Script{}
 	*s = append(*s, script.Op0, script.OpRETURN)
 
-	pushes := [][]byte{MetaFlagBytes, pNodeBytes, parentTxID, payload}
+	pushes := [][]byte{MetaFlagBytes(), pNodeBytes, parentTxID, payload}
 	for _, push := range pushes {
 		err := s.AppendPushData(push)
 		require.NoError(t, err)
@@ -102,17 +103,24 @@ func TestParseTxNodeOps_BatchThreeOps(t *testing.T) {
 	}
 }
 
-func TestParseTxNodeOps_OPReturnAtEnd_Error(t *testing.T) {
+func TestParseTxNodeOps_OPReturnAtEnd_Delete(t *testing.T) {
+	// [Audit fix M-1] OP_RETURN as the last output with no following P2PKH
+	// is now treated as an OpDelete, not an error.
 	pNode := makePNode(0x02)
 	payload := []byte("test payload")
 
-	// OP_RETURN as the last output with no following P2PKH.
 	outputs := []TxOutput{
 		buildTestOPReturnOutput(t, pNode, nil, payload),
 	}
 
-	_, err := ParseTxNodeOps(outputs)
-	assert.ErrorIs(t, err, ErrInvalidOPReturn)
+	ops, err := ParseTxNodeOps(outputs)
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+	assert.True(t, ops[0].IsDelete, "lone OP_RETURN should be parsed as delete")
+	assert.Equal(t, uint32(0), ops[0].Vout)
+	assert.Equal(t, uint32(0), ops[0].NodeVout, "delete should have NodeVout=0")
+	assert.Equal(t, pNode, ops[0].PNode)
+	assert.Equal(t, payload, ops[0].Payload)
 }
 
 func TestParseTxNodeOps_NoOPReturn_Empty(t *testing.T) {
@@ -146,6 +154,100 @@ func TestParseTxNodeOps_NonMetanetOPReturn_Skipped(t *testing.T) {
 	ops, err := ParseTxNodeOps(outputs)
 	require.NoError(t, err)
 	assert.Empty(t, ops)
+}
+
+// [Audit fix M-1] OpDelete in the middle of a batch: OP_RETURN without following P2PKH.
+func TestParseTxNodeOps_DeleteInMiddle(t *testing.T) {
+	pNode1 := makePNode(0x02)
+	pNode2 := makePNode(0x03) // delete
+	pNode3 := makePNode(0x04)
+
+	outputs := []TxOutput{
+		// Op 0: create (OP_RETURN + P2PKH)
+		buildTestOPReturnOutput(t, pNode1, bytes.Repeat([]byte{0xaa}, TxIDLen), []byte("payload-1")),
+		buildTestP2PKHOutput(t, 0x02),
+		// Op 1: delete (OP_RETURN only — next output is another OP_RETURN, not P2PKH)
+		buildTestOPReturnOutput(t, pNode2, bytes.Repeat([]byte{0xbb}, TxIDLen), []byte("delete-payload")),
+		// Op 2: create (OP_RETURN + P2PKH)
+		buildTestOPReturnOutput(t, pNode3, bytes.Repeat([]byte{0xcc}, TxIDLen), []byte("payload-3")),
+		buildTestP2PKHOutput(t, 0x04),
+		// Change
+		{Value: 50000, ScriptPubKey: bytes.Repeat([]byte{0xff}, 25)},
+	}
+
+	ops, err := ParseTxNodeOps(outputs)
+	require.NoError(t, err)
+	require.Len(t, ops, 3)
+
+	// Op 0: create
+	assert.False(t, ops[0].IsDelete)
+	assert.Equal(t, uint32(0), ops[0].Vout)
+	assert.Equal(t, uint32(1), ops[0].NodeVout)
+
+	// Op 1: delete
+	assert.True(t, ops[1].IsDelete)
+	assert.Equal(t, uint32(2), ops[1].Vout)
+	assert.Equal(t, pNode2, ops[1].PNode)
+
+	// Op 2: create
+	assert.False(t, ops[2].IsDelete)
+	assert.Equal(t, uint32(3), ops[2].Vout)
+	assert.Equal(t, uint32(4), ops[2].NodeVout)
+}
+
+// [Audit fix M-1] Build + Parse round-trip for a batch with OpDelete.
+func TestParseTxNodeOps_BuildDeleteRoundTrip(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, createPub := generateTestKeyPair(t)
+
+	batch := NewMutationBatch()
+
+	// Op 0: create child.
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpCreate,
+		PubKey:     createPub,
+		ParentTxID: bytes.Repeat([]byte{0xaa}, 32),
+		Payload:    []byte("create-payload"),
+	})
+
+	// Op 1: delete node.
+	batch.AddNodeOp(BatchNodeOp{
+		Type:       OpDelete,
+		PubKey:     pub,
+		ParentTxID: bytes.Repeat([]byte{0xbb}, 32),
+		Payload:    []byte("delete-payload"),
+		InputUTXO:  &UTXO{TxID: bytes.Repeat([]byte{0x02}, 32), Vout: 0, Amount: 1, PrivateKey: priv},
+	})
+
+	batch.AddFeeInput(testFeeUTXO(t, 100000))
+	batch.SetChange(bytes.Repeat([]byte{0xcc}, 20))
+
+	result, err := batch.Build()
+	require.NoError(t, err)
+
+	// Parse the outputs from the built transaction.
+	sdkTx, err := transaction.NewTransactionFromBytes(result.RawTx)
+	require.NoError(t, err)
+
+	var txOutputs []TxOutput
+	for _, out := range sdkTx.Outputs {
+		txOutputs = append(txOutputs, TxOutput{
+			Value:        out.Satoshis,
+			ScriptPubKey: []byte(*out.LockingScript),
+		})
+	}
+
+	ops, err := ParseTxNodeOps(txOutputs)
+	require.NoError(t, err)
+	require.Len(t, ops, 2)
+
+	// Op 0: create (not delete).
+	assert.False(t, ops[0].IsDelete)
+	assert.Equal(t, []byte("create-payload"), ops[0].Payload)
+
+	// Op 1: delete.
+	assert.True(t, ops[1].IsDelete)
+	assert.Equal(t, []byte("delete-payload"), ops[1].Payload)
 }
 
 // makePNode creates a fake 33-byte compressed public key for testing.

@@ -137,21 +137,36 @@ func setConfigField(cfg *Config, key, value string) {
 }
 
 // SaveConfig writes the configuration to the given path in key=value format.
+// Uses atomic write-to-tmp-then-rename to prevent partial writes from corrupting
+// the config file if the process is interrupted. [Audit fix L-6]
 func SaveConfig(path string, cfg Config) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("config: create directory %s: %w", dir, err)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return fmt.Errorf("config: create %s: %w", path, err)
+		return fmt.Errorf("config: create %s: %w", tmp, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
 	writeConfigFile(w, cfg)
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: flush %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: close %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp) // best-effort cleanup
+		return fmt.Errorf("config: rename %s -> %s: %w", tmp, path, err)
+	}
+	return nil
 }
 
 // writeConfigFile writes a human-readable config file to w.

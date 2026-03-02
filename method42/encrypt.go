@@ -119,12 +119,14 @@ func Encrypt(plaintext []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicKe
 	if err != nil {
 		return nil, fmt.Errorf("method42: ECDH failed: %w", err)
 	}
+	defer zeroize(sharedX)
 
 	// Step 4: Derive AES key via HKDF-SHA256
 	aesKey, err := DeriveAESKey(sharedX, keyHash)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(aesKey)
 
 	// Step 5: Encrypt with AES-256-GCM (keyHash as AAD binds ciphertext to context)
 	ciphertext, err := aesGCMEncrypt(plaintext, aesKey, keyHash)
@@ -164,12 +166,14 @@ func Decrypt(ciphertext []byte, privateKey *ec.PrivateKey, publicKey *ec.PublicK
 	if err != nil {
 		return nil, fmt.Errorf("method42: ECDH failed: %w", err)
 	}
+	defer zeroize(sharedX)
 
 	// Derive AES key via HKDF-SHA256
 	aesKey, err := DeriveAESKey(sharedX, keyHash)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(aesKey)
 
 	// Decrypt with AES-256-GCM (keyHash as AAD binds ciphertext to context)
 	plaintext, err := aesGCMDecrypt(ciphertext, aesKey, keyHash)
@@ -243,15 +247,18 @@ func DecryptWithCapsuleNonce(ciphertext []byte, capsule []byte, keyHash []byte,
 	if err != nil {
 		return nil, fmt.Errorf("method42: capsule ECDH failed: %w", err)
 	}
+	defer zeroize(sharedBuyer)
 
 	// 2. buyerMask = DeriveBuyerMaskWithNonce(sharedBuyer, keyHash, nonce)
 	buyerMask, err := DeriveBuyerMaskWithNonce(sharedBuyer, keyHash, nonce)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(buyerMask)
 
 	// 3. aesKey = capsule XOR buyerMask
 	aesKey := xorBytes(capsule, buyerMask)
+	defer zeroize(aesKey)
 
 	// 4. Decrypt with AES-256-GCM (keyHash as AAD)
 	plaintext, err := aesGCMDecrypt(ciphertext, aesKey, keyHash)
@@ -307,11 +314,13 @@ func EncryptMetadata(tlvPayload []byte, privateKey *ec.PrivateKey, publicKey *ec
 	if err != nil {
 		return nil, fmt.Errorf("method42: metadata ECDH failed: %w", err)
 	}
+	defer zeroize(sharedX)
 
 	metaKey, salt, err := DeriveMetadataKey(sharedX)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(metaKey)
 
 	ciphertext, err := aesGCMEncrypt(tlvPayload, metaKey, salt)
 	if err != nil {
@@ -346,11 +355,13 @@ func DecryptMetadata(encPayload []byte, privateKey *ec.PrivateKey, publicKey *ec
 	if err != nil {
 		return nil, fmt.Errorf("method42: metadata ECDH failed: %w", err)
 	}
+	defer zeroize(sharedX)
 
 	metaKey, err := DeriveMetadataKeyWithSalt(sharedX, salt)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(metaKey)
 
 	return aesGCMDecrypt(ciphertext, metaKey, salt)
 }

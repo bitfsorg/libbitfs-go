@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/bitfsorg/libbitfs-go/spv"
 )
@@ -22,25 +24,34 @@ type SPVClient struct {
 	headers spv.HeaderStore
 
 	// getBlockHash fetches block hash by height.
-	// Injected in tests; for RPCClient, set automatically.
+	// Auto-detected from BlockHashProvider interface; can also be set explicitly
+	// via SetBlockHashFunc for testing or custom implementations.
 	getBlockHash func(ctx context.Context, height uint64) (string, error)
+
+	// syncMu serializes SyncHeaders calls to prevent redundant concurrent syncs. [Audit fix H-10]
+	syncMu sync.Mutex
 }
 
 // NewSPVClient creates an SPV client backed by a blockchain service and header store.
+// If chain implements BlockHashProvider, getBlockHash is automatically configured
+// for SyncHeaders support.
 func NewSPVClient(chain BlockchainService, headers spv.HeaderStore) *SPVClient {
 	s := &SPVClient{
 		chain:   chain,
 		headers: headers,
 	}
-	// If chain is an RPCClient, wire up getBlockHash via RPC.
-	if rpc, ok := chain.(*RPCClient); ok {
-		s.getBlockHash = func(ctx context.Context, height uint64) (string, error) {
-			var hash string
-			err := rpc.Call(ctx, "getblockhash", []interface{}{height}, &hash)
-			return hash, err
-		}
+	// Auto-detect BlockHashProvider (satisfied by RPCClient and any custom implementation).
+	if bhp, ok := chain.(BlockHashProvider); ok {
+		s.getBlockHash = bhp.GetBlockHash
 	}
 	return s
+}
+
+// SetBlockHashFunc explicitly sets the function used by SyncHeaders to look up
+// block hashes by height. This overrides the auto-detected BlockHashProvider.
+// Useful for testing or custom blockchain service implementations.
+func (s *SPVClient) SetBlockHashFunc(fn func(ctx context.Context, height uint64) (string, error)) {
+	s.getBlockHash = fn
 }
 
 // VerifyTx performs SPV verification of a transaction:
@@ -79,7 +90,10 @@ func (s *SPVClient) VerifyTx(ctx context.Context, txid string) (*VerifyResult, e
 		header.Height = uint32(status.BlockHeight)
 		header.Hash = spv.ComputeHeaderHash(header)
 		if storeErr := s.headers.PutHeader(header); storeErr != nil {
-			return nil, fmt.Errorf("network: store header: %w", storeErr)
+			// Treat ErrDuplicateHeader as non-fatal: another goroutine stored it first. [Audit fix H-10]
+			if !errors.Is(storeErr, spv.ErrDuplicateHeader) {
+				return nil, fmt.Errorf("network: store header: %w", storeErr)
+			}
 		}
 	}
 
@@ -98,7 +112,7 @@ func (s *SPVClient) VerifyTx(ctx context.Context, txid string) (*VerifyResult, e
 
 	// Single-tx block: txHash IS the Merkle root, no branches needed.
 	if len(proof.Branches) == 0 && proof.Index == 0 {
-		if !bytesEqual(txidInternal, header.MerkleRoot) {
+		if !bytes.Equal(txidInternal, header.MerkleRoot) {
 			return nil, fmt.Errorf("network: merkle proof verification failed for tx %s", txid)
 		}
 	} else {
@@ -127,7 +141,11 @@ func (s *SPVClient) VerifyTx(ctx context.Context, txid string) (*VerifyResult, e
 
 // SyncHeaders fetches block headers from the network and stores them locally.
 // Syncs from current tip to the latest block.
+// Serialized via syncMu to prevent redundant concurrent syncs. [Audit fix H-10]
 func (s *SPVClient) SyncHeaders(ctx context.Context) error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
 	if s.getBlockHash == nil {
 		return fmt.Errorf("network: getBlockHash not configured")
 	}
@@ -179,21 +197,13 @@ func (s *SPVClient) SyncHeaders(ctx context.Context) error {
 		}
 
 		if putErr := s.headers.PutHeader(header); putErr != nil {
-			return fmt.Errorf("network: store header at %d: %w", h, putErr)
+			// Treat ErrDuplicateHeader as non-fatal (concurrent sync race). [Audit fix H-10]
+			if !errors.Is(putErr, spv.ErrDuplicateHeader) {
+				return fmt.Errorf("network: store header at %d: %w", h, putErr)
+			}
 		}
 	}
 
 	return nil
 }
 
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}

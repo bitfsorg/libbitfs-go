@@ -38,9 +38,9 @@ func TestDetectMimeType(t *testing.T) {
 		// Case insensitivity.
 		{"README.TXT", "text/plain"},
 		{"Photo.JPG", "image/jpeg"},
-		// Unknown extension falls back to http.DetectContentType default.
-		{"file.xyz", "text/plain; charset=utf-8"},
-		{"noext", "text/plain; charset=utf-8"},
+		// Unknown extension falls back to application/octet-stream.
+		{"file.xyz", "application/octet-stream"},
+		{"noext", "application/octet-stream"},
 	}
 
 	for _, tt := range tests {

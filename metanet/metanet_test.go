@@ -410,7 +410,7 @@ func TestParseNode_ValidFile(t *testing.T) {
 	// We need an ec.PublicKey - since we can't easily construct one from raw bytes
 	// in tests, we'll construct the pushes manually matching the format
 	pushes := [][]byte{
-		tx.MetaFlagBytes,
+		tx.MetaFlagBytes(),
 		pNode,
 		parentTxID,
 		payload,
@@ -443,7 +443,7 @@ func TestParseNode_ValidDir(t *testing.T) {
 	payload, err := SerializePayload(node)
 	require.NoError(t, err)
 
-	pushes := [][]byte{tx.MetaFlagBytes, pNode, nil, payload}
+	pushes := [][]byte{tx.MetaFlagBytes(), pNode, nil, payload}
 
 	parsed, err := ParseNode(pushes)
 	require.NoError(t, err)
@@ -467,7 +467,7 @@ func TestParseNode_ValidLink(t *testing.T) {
 	payload, err := SerializePayload(node)
 	require.NoError(t, err)
 
-	pushes := [][]byte{tx.MetaFlagBytes, pNode, nil, payload}
+	pushes := [][]byte{tx.MetaFlagBytes(), pNode, nil, payload}
 	parsed, err := ParseNode(pushes)
 	require.NoError(t, err)
 	assert.Equal(t, NodeTypeLink, parsed.Type)
@@ -502,7 +502,7 @@ func TestParseNodeFromPushesWithTxID(t *testing.T) {
 	payload, err := SerializePayload(node)
 	require.NoError(t, err)
 
-	pushes := [][]byte{tx.MetaFlagBytes, pNode, nil, payload}
+	pushes := [][]byte{tx.MetaFlagBytes(), pNode, nil, payload}
 	parsed, err := ParseNodeFromPushesWithTxID(pushes, txID)
 	require.NoError(t, err)
 	assert.Equal(t, txID, parsed.TxID)
@@ -2045,7 +2045,7 @@ func TestParseNodeFromPushesWithTxID_InvalidTxIDLength(t *testing.T) {
 	payload, err := SerializePayload(node)
 	require.NoError(t, err)
 
-	pushes := [][]byte{tx.MetaFlagBytes, pNode, nil, payload}
+	pushes := [][]byte{tx.MetaFlagBytes(), pNode, nil, payload}
 
 	// TxID with wrong length (16 bytes instead of 32)
 	shortTxID := make([]byte, 16)
@@ -2282,7 +2282,7 @@ func BenchmarkParseNode(b *testing.B) {
 	}
 
 	pushes := [][]byte{
-		tx.MetaFlagBytes,
+		tx.MetaFlagBytes(),
 		pNode,
 		parentTxID,
 		payload,

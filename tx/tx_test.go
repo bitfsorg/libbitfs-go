@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ func TestBuildOPReturnData(t *testing.T) {
 	assert.Len(t, pushes, 4)
 
 	// Verify MetaFlag
-	assert.Equal(t, MetaFlagBytes, pushes[0])
+	assert.Equal(t, MetaFlagBytes(), pushes[0])
 
 	// Verify P_node
 	assert.Len(t, pushes[1], CompressedPubKeyLen)
@@ -125,7 +126,7 @@ func TestParseOPReturnData_WrongMetaFlag(t *testing.T) {
 
 func TestParseOPReturnData_InvalidPNodeLength(t *testing.T) {
 	pushes := [][]byte{
-		MetaFlagBytes,
+		MetaFlagBytes(),
 		{0x02, 0x03}, // too short
 		bytes.Repeat([]byte{0x03}, 32),
 		[]byte("payload"),
@@ -216,6 +217,17 @@ func TestBuildDataTransaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.NotNil(t, result.NodeUTXO)
+	// [Audit fix H-2] RawTx must be populated (was nil in the stub).
+	assert.NotEmpty(t, result.RawTx, "RawTx should be populated after H-2 fix")
+	assert.NotNil(t, result.NodeUTXO.ScriptPubKey, "NodeUTXO should have ScriptPubKey")
+	assert.NotNil(t, result.ChangeUTXO, "should have change output with large fee input")
+	assert.NotEmpty(t, result.ChangeUTXO.ScriptPubKey, "ChangeUTXO should have ScriptPubKey")
+
+	// Verify the RawTx can be parsed.
+	sdkTx, err := transaction.NewTransactionFromBytes(result.RawTx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sdkTx.InputCount())
+	assert.GreaterOrEqual(t, len(sdkTx.Outputs), 1)
 }
 
 func TestBuildDataTransaction_EmptyContent(t *testing.T) {
@@ -245,7 +257,7 @@ func TestBuildDataTransaction_InsufficientFunds(t *testing.T) {
 // --- Constants tests ---
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, []byte{0x6d, 0x65, 0x74, 0x61}, MetaFlagBytes)
+	assert.Equal(t, []byte{0x6d, 0x65, 0x74, 0x61}, MetaFlagBytes())
 	assert.Equal(t, "meta", MetaFlag)
 	assert.Equal(t, uint64(1), DustLimit)
 	assert.Equal(t, 33, CompressedPubKeyLen)
@@ -299,7 +311,7 @@ func TestBuildDataTransaction_NilParams(t *testing.T) {
 
 func TestParseOPReturnData_InvalidParentTxIDLength(t *testing.T) {
 	pushes := [][]byte{
-		MetaFlagBytes,
+		MetaFlagBytes(),
 		bytes.Repeat([]byte{0x02}, CompressedPubKeyLen), // valid P_node length
 		{0x01, 0x02, 0x03}, // 3 bytes -- not 0 and not 32
 		[]byte("payload"),
@@ -312,7 +324,7 @@ func TestParseOPReturnData_InvalidParentTxIDLength(t *testing.T) {
 
 func TestParseOPReturnData_EmptyPayload(t *testing.T) {
 	pushes := [][]byte{
-		MetaFlagBytes,
+		MetaFlagBytes(),
 		bytes.Repeat([]byte{0x02}, CompressedPubKeyLen),
 		bytes.Repeat([]byte{0x03}, TxIDLen),
 		{}, // empty payload

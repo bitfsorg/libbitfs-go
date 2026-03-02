@@ -57,9 +57,7 @@ func TestLocalState_SaveAndLoad(t *testing.T) {
 		Amount: 5000,
 		Type:   "fee",
 	})
-	s.mu.Lock()
-	s.RootTxID[0] = "dd22"
-	s.mu.Unlock()
+	s.SetRootTxID(0, "dd22")
 
 	if err := s.Save(); err != nil {
 		t.Fatalf("Save: %v", err)

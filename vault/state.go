@@ -137,7 +137,8 @@ func (s *LocalState) Reload() error {
 	return nil
 }
 
-// Save persists the local state to disk.
+// Save persists the local state to disk using atomic write-tmp-rename
+// to prevent corruption from crashes or concurrent CLI processes. [Audit fix M-8]
 // Spent UTXOs are pruned before writing to prevent unbounded growth.
 func (s *LocalState) Save() error {
 	s.mu.Lock()
@@ -160,7 +161,18 @@ func (s *LocalState) Save() error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("vault: create state directory: %w", err)
 	}
-	return os.WriteFile(s.path, data, 0600)
+
+	// Write to a temporary file, then atomically rename.
+	// This prevents partial writes from corrupting the state file.
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("vault: write state tmp: %w", err)
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp) // best-effort cleanup
+		return fmt.Errorf("vault: rename state: %w", err)
+	}
+	return nil
 }
 
 // AllocateFeeUTXO finds an unspent fee UTXO with at least minAmount satoshis.
@@ -288,6 +300,27 @@ func (s *LocalState) ListPublishBindings() []*PublishBinding {
 		out[i] = &cp
 	}
 	return out
+}
+
+// SetRootTxID stores the root TxID for a given vault index.
+// This method properly encapsulates LocalState.mu access. [Audit fix H-4]
+func (s *LocalState) SetRootTxID(vaultIdx uint32, txid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.RootTxID[vaultIdx] = txid
+}
+
+// ContainsUTXO checks whether a UTXO with the given txid and vout exists (regardless of spent status).
+// [Audit fix M-6]
+func (s *LocalState) ContainsUTXO(txid string, vout uint32) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.UTXOs {
+		if u.TxID == txid && u.Vout == vout {
+			return true
+		}
+	}
+	return false
 }
 
 // RemovePublishBinding removes the publish binding for a domain.

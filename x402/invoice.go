@@ -14,6 +14,8 @@ import (
 )
 
 // Invoice represents a payment request for content access.
+// Invoice is typically immutable after creation via NewInvoice. Do not modify
+// exported fields concurrently with IsExpired or other reads. [Audit note L-11]
 type Invoice struct {
 	ID          string `json:"id"`
 	Price       uint64 `json:"price"`        // Total price in satoshis
@@ -33,20 +35,22 @@ type PaymentProof struct {
 
 // CalculatePrice computes the total price for content.
 // total = ceil(pricePerKB * fileSize / 1024)
-func CalculatePrice(pricePerKB, fileSize uint64) uint64 {
+//
+// Returns ErrPriceOverflow if the multiplication overflows uint64.
+func CalculatePrice(pricePerKB, fileSize uint64) (uint64, error) {
 	if pricePerKB == 0 || fileSize == 0 {
-		return 0
+		return 0, nil
 	}
 	// Checked multiplication: detect overflow before computing.
 	if pricePerKB > math.MaxUint64/fileSize {
-		return math.MaxUint64
+		return 0, fmt.Errorf("%w: %d * %d exceeds uint64", ErrPriceOverflow, pricePerKB, fileSize)
 	}
 	numerator := pricePerKB * fileSize
 	// Checked addition for ceiling: (numerator + 1023) may overflow.
 	if numerator > math.MaxUint64-1023 {
-		return math.MaxUint64
+		return 0, fmt.Errorf("%w: ceiling adjustment overflows uint64", ErrPriceOverflow)
 	}
-	return (numerator + 1023) / 1024
+	return (numerator + 1023) / 1024, nil
 }
 
 // NewInvoice creates a new payment invoice.
@@ -60,7 +64,10 @@ func NewInvoice(pricePerKB, fileSize uint64, paymentAddr string, capsuleHash []b
 	if err != nil {
 		return nil, err
 	}
-	totalPrice := CalculatePrice(pricePerKB, fileSize)
+	totalPrice, err := CalculatePrice(pricePerKB, fileSize)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now()
 
 	return &Invoice{

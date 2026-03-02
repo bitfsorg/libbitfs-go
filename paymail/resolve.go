@@ -33,6 +33,9 @@ type HTTPClient interface {
 }
 
 // DefaultHTTPClient is the production HTTP client with a 30-second timeout.
+// This global is NOT safe for concurrent mutation. Prefer passing a client
+// explicitly via the *WithClient variants. Only modify at init time.
+// [Audit fix M-15]
 var DefaultHTTPClient HTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // wellKnownResponse represents the JSON structure of .well-known/bsvalias.

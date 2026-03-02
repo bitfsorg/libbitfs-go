@@ -125,6 +125,11 @@ type ChildEntry struct {
 }
 
 // Node represents a parsed Metanet node with its payload.
+//
+// Node is NOT safe for concurrent use. Callers must serialize all reads and
+// writes to a Node, including mutations via AddChild, RemoveChild, and
+// RenameChild. The daemon ensures single-writer access through its request
+// serialization model; CLI tools are inherently single-threaded. [Audit fix H-9]
 type Node struct {
 	TxID        []byte // Transaction ID (32 bytes)
 	PNode       []byte // P_node compressed public key (33 bytes)

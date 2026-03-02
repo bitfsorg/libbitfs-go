@@ -35,6 +35,14 @@ type BlockchainService interface {
 	ImportAddress(ctx context.Context, address string) error
 }
 
+// BlockHashProvider is an optional interface that BlockchainService
+// implementations may satisfy to support SyncHeaders. It provides the
+// GetBlockHash method needed for header synchronization.
+type BlockHashProvider interface {
+	// GetBlockHash returns the block hash (display hex) at the given height.
+	GetBlockHash(ctx context.Context, height uint64) (string, error)
+}
+
 // UTXO represents an unspent transaction output.
 type UTXO struct {
 	TxID          string `json:"txid"`

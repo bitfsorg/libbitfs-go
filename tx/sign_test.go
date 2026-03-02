@@ -144,6 +144,7 @@ func TestSignMetanetTx_Success_ViaBatch(t *testing.T) {
 	batch := NewMutationBatch()
 	batch.AddCreateRoot(pubKey, []byte("test metanet root payload"))
 	batch.AddFeeInput(feeUTXO)
+	batch.SetChange(bytes.Repeat([]byte{0xcc}, 20))
 
 	result, err := batch.Build()
 	require.NoError(t, err)
@@ -189,7 +190,7 @@ func TestSignMetanetTx_InvalidRawTx(t *testing.T) {
 
 func TestBuildOPReturnScript(t *testing.T) {
 	pushes := [][]byte{
-		MetaFlagBytes,
+		MetaFlagBytes(),
 		bytes.Repeat([]byte{0x02}, CompressedPubKeyLen),
 		{}, // empty parent TxID (root)
 		[]byte("test payload"),

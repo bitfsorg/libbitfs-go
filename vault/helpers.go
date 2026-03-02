@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -154,9 +153,7 @@ func (v *Vault) createRootNode(vaultIdx uint32, rootPubHex string) (*NodeState, 
 	}
 
 	v.State.SetNode(rootPubHex, rootState)
-	v.State.mu.Lock()
-	v.State.RootTxID[vaultIdx] = result.TxID
-	v.State.mu.Unlock()
+	v.State.SetRootTxID(vaultIdx, result.TxID) // [Audit fix H-4]
 
 	return rootState, result, nil
 }
@@ -280,7 +277,7 @@ func DetectMimeType(filename string) string {
 	case ".md":
 		return "text/markdown"
 	default:
-		return http.DetectContentType([]byte{})
+		return "application/octet-stream"
 	}
 }
 

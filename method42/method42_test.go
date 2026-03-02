@@ -388,11 +388,13 @@ func TestDecryptWithCapsule(t *testing.T) {
 
 	// Verify capsule hash works for HTLC
 	fileTxID := bytes.Repeat([]byte{0xf1}, 32) // mock file txid
-	capsuleHash := ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 	assert.Len(t, capsuleHash, 32)
 
 	// Buyer verifies the capsule matches the hash
-	recomputedHash := ComputeCapsuleHash(fileTxID, capsule)
+	recomputedHash, chErr := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 	assert.Equal(t, capsuleHash, recomputedHash)
 
 	// Buyer decrypts with capsule using their private key + node's public key.
@@ -501,10 +503,11 @@ func TestEncrypt_InvalidAccess(t *testing.T) {
 func TestComputeCapsuleHash(t *testing.T) {
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
 	capsule := bytes.Repeat([]byte{0xab}, 32)
-	hash := ComputeCapsuleHash(fileTxID, capsule)
+	hash, err := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, err)
 	assert.Len(t, hash, 32)
 
-	// Should be SHA256(fileTxID ‖ capsule)
+	// Should be SHA256(fileTxID || capsule)
 	expected := sha256.New()
 	expected.Write(fileTxID)
 	expected.Write(capsule)
@@ -513,10 +516,29 @@ func TestComputeCapsuleHash(t *testing.T) {
 
 func TestComputeCapsuleHash_Deterministic(t *testing.T) {
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
-	capsule := []byte("test capsule data")
-	hash1 := ComputeCapsuleHash(fileTxID, capsule)
-	hash2 := ComputeCapsuleHash(fileTxID, capsule)
+	capsule := bytes.Repeat([]byte{0xab}, 32)
+	hash1, err1 := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, err1)
+	hash2, err2 := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, err2)
 	assert.Equal(t, hash1, hash2)
+}
+
+func TestComputeCapsuleHash_InvalidInputs(t *testing.T) {
+	validID := bytes.Repeat([]byte{0xf0}, 32)
+	validCapsule := bytes.Repeat([]byte{0xab}, 32)
+
+	_, err := ComputeCapsuleHash([]byte("short"), validCapsule)
+	assert.Error(t, err, "short fileTxID should return error")
+
+	_, err = ComputeCapsuleHash(validID, []byte("short"))
+	assert.Error(t, err, "short capsule should return error")
+
+	_, err = ComputeCapsuleHash(nil, validCapsule)
+	assert.Error(t, err, "nil fileTxID should return error")
+
+	_, err = ComputeCapsuleHash(validID, nil)
+	assert.Error(t, err, "nil capsule should return error")
 }
 
 // --- Integration: Full encryption flow ---
@@ -558,7 +580,8 @@ func TestFullEncryptionFlow_FreeThenBuy(t *testing.T) {
 
 	// 3. Seller provides capsule_hash for HTLC
 	fileTxID := bytes.Repeat([]byte{0xf2}, 32) // mock file txid
-	capsuleHash := ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 	assert.Len(t, capsuleHash, 32)
 
 	// 4. After HTLC is resolved, buyer gets capsule
@@ -1050,8 +1073,9 @@ func TestReEncrypt_NonceUniqueness(t *testing.T) {
 
 func TestComputeCapsuleHash_EmptyCapsule(t *testing.T) {
 	fileTxID := bytes.Repeat([]byte{0xf0}, 32)
-	hash := ComputeCapsuleHash(fileTxID, []byte{})
-	assert.Nil(t, hash, "ComputeCapsuleHash of empty capsule should return nil (capsule must be 32 bytes)")
+	hash, err := ComputeCapsuleHash(fileTxID, []byte{})
+	assert.Error(t, err, "ComputeCapsuleHash of empty capsule should return error (capsule must be 32 bytes)")
+	assert.Nil(t, hash)
 }
 
 // =============================================================================
@@ -1155,7 +1179,8 @@ func TestDecryptWithCapsuleNonce_RoundTrip(t *testing.T) {
 
 	// Verify capsule hash works for HTLC.
 	fileTxID := bytes.Repeat([]byte{0xf3}, 32)
-	capsuleHash := ComputeCapsuleHash(fileTxID, capsule)
+	capsuleHash, chErr := ComputeCapsuleHash(fileTxID, capsule)
+	require.NoError(t, chErr)
 	assert.Len(t, capsuleHash, 32)
 
 	// Buyer decrypts with capsule and nonce.
@@ -1303,8 +1328,10 @@ func TestCapsuleWithNonce_FullPurchaseFlow(t *testing.T) {
 		"capsules for same buyer+file with different nonces must differ")
 
 	// 4. Capsule hashes are different (HTLC scripts are unique).
-	hash1 := ComputeCapsuleHash(fileTxID, capsule1)
-	hash2 := ComputeCapsuleHash(fileTxID, capsule2)
+	hash1, err := ComputeCapsuleHash(fileTxID, capsule1)
+	require.NoError(t, err)
+	hash2, err := ComputeCapsuleHash(fileTxID, capsule2)
+	require.NoError(t, err)
 	assert.NotEqual(t, hash1, hash2,
 		"capsule hashes should differ when capsules differ")
 

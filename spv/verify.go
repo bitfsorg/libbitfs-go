@@ -28,8 +28,9 @@ type StoredTx struct {
 //  3. Block header: Merkle root matches the stored block header
 //  4. Chain verification: block header exists in the header store
 //
-// Note: This function does not check minimum network difficulty. Use
-// VerifyTransactionWithNetwork for network-aware difficulty validation.
+// Deprecated: This function does not check minimum network difficulty and
+// is unsuitable for production use on mainnet. A header mined at regtest
+// difficulty would pass verification. Use VerifyTransactionWithNetwork instead.
 func VerifyTransaction(tx *StoredTx, headers HeaderStore) error {
 	if tx == nil {
 		return fmt.Errorf("%w: stored transaction", ErrNilParam)

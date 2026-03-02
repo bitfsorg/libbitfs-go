@@ -19,6 +19,11 @@ var (
 )
 
 // BoltStore wraps a bbolt database for SPV header and transaction storage.
+//
+// Note: BoltStore uses Go's encoding/gob for serialization, which is Go-specific
+// and cannot be decoded by other languages (e.g., libbitfs-ts). If cross-language
+// compatibility is needed in the future, consider migrating to a portable format
+// such as Protocol Buffers or CBOR.
 type BoltStore struct {
 	db *bbolt.DB
 }

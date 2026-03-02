@@ -33,4 +33,11 @@ var (
 	// ErrFundingMismatch indicates the pre-signed refund tx references a different
 	// HTLC funding UTXO than the buyer expected.
 	ErrFundingMismatch = errors.New("x402: funding UTXO mismatch")
+
+	// ErrPriceOverflow indicates that the price calculation overflowed uint64.
+	ErrPriceOverflow = errors.New("x402: price calculation overflow")
+
+	// ErrFundingAmountMismatch indicates the provided FundingAmount does not match
+	// the actual HTLC output value in the pre-signed transaction.
+	ErrFundingAmountMismatch = errors.New("x402: funding amount mismatch")
 )

@@ -37,7 +37,7 @@ func (v *Vault) Get(opts *GetOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: create local directory: %w", err)
 	}
 
-	f, err := os.Create(localPath)
+	f, err := os.OpenFile(localPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("vault: create local file: %w", err)
 	}

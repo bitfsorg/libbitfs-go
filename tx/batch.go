@@ -28,10 +28,14 @@ type BatchNodeOp struct {
 	ParentTxID []byte         // Parent's TxID (for OP_RETURN field 2)
 	Payload    []byte         // Serialized TLV payload
 	InputUTXO  *UTXO          // UTXO to spend (nil for new creates — no existing UTXO)
-	PrivateKey *ec.PrivateKey // Signing key for this node's input
+	PrivateKey *ec.PrivateKey // Deprecated: use InputUTXO.PrivateKey instead. [Audit fix M-5]
 }
 
 // MutationBatch collects multiple node operations into a single TX.
+//
+// MutationBatch is NOT safe for concurrent use. All AddNodeOp, AddFeeInput,
+// SetChange, SetFeeRate, Build, and Sign calls must be serialized by the caller.
+// [Audit fix M-14]
 type MutationBatch struct {
 	ops        []BatchNodeOp
 	feeInputs  []*UTXO
@@ -113,10 +117,23 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		if len(op.ParentTxID) != 0 && len(op.ParentTxID) != TxIDLen {
 			return nil, fmt.Errorf("%w: op[%d] parent TxID length %d", ErrInvalidParentTxID, i, len(op.ParentTxID))
 		}
+		// [Audit fix M-2] OpUpdate and OpDelete semantically require an existing UTXO.
+		if (op.Type == OpUpdate || op.Type == OpDelete) && op.InputUTXO == nil {
+			return nil, fmt.Errorf("%w: op[%d] %s requires InputUTXO", ErrNilParam, i, opTypeName(op.Type))
+		}
 		// OpCreateRoot: no InputUTXO or PrivateKey needed.
-		// All other types with InputUTXO must have PrivateKey.
-		if op.Type != OpCreateRoot && op.InputUTXO != nil && op.PrivateKey == nil {
-			return nil, fmt.Errorf("%w: op[%d] has InputUTXO but nil PrivateKey", ErrNilParam, i)
+		// All other types with InputUTXO must have a PrivateKey (on the UTXO).
+		// [Audit fix M-5] Use InputUTXO.PrivateKey as the canonical source.
+		// For backward compatibility, also accept op.PrivateKey and copy it
+		// to InputUTXO.PrivateKey if the latter is nil.
+		if op.Type != OpCreateRoot && op.InputUTXO != nil {
+			if op.PrivateKey != nil && op.InputUTXO.PrivateKey == nil {
+				op.InputUTXO.PrivateKey = op.PrivateKey
+				b.ops[i] = op // write back
+			}
+			if op.InputUTXO.PrivateKey == nil {
+				return nil, fmt.Errorf("%w: op[%d] InputUTXO has nil PrivateKey", ErrNilParam, i)
+			}
 		}
 	}
 
@@ -173,9 +190,8 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 		totalPayloadSize += len(op.Payload)
 	}
 
-	// Estimate fee. Use EstimateTxSize for the base and add extra for additional OP_RETURN outputs.
-	// Each additional op beyond the first adds one OP_RETURN output overhead.
-	baseEstimate := EstimateTxSize(numInputs, numOutputs, totalPayloadSize)
+	// Estimate fee. [Audit fix M-3: pass numOps for per-OP_RETURN overhead]
+	baseEstimate := EstimateTxSize(numInputs, numOutputs, totalPayloadSize, len(b.ops))
 	estFee := EstimateFee(baseEstimate, feeRate)
 
 	// Calculate total available funds (deduped node inputs + deduped fee inputs).
@@ -306,25 +322,19 @@ func (b *MutationBatch) Build() (*BatchResult, error) {
 	var changeUTXO *UTXO
 
 	if changeAmount > DustLimit {
-		var changeLockScript *script.Script
-		if len(b.changeAddr) == 20 {
-			addr, err := script.NewAddressFromPublicKeyHash(b.changeAddr, true)
-			if err != nil {
-				return nil, fmt.Errorf("%w: change address: %w", ErrScriptBuild, err)
-			}
-			changeLockScript, err = p2pkh.Lock(addr)
-			if err != nil {
-				return nil, fmt.Errorf("%w: change lock script: %w", ErrScriptBuild, err)
-			}
-		} else if len(b.ops) == 1 {
-			// Single-op batch: fall back to the op's node key as change destination.
-			firstNodeScript, err := BuildP2PKHScript(b.ops[0].PubKey)
-			if err != nil {
-				return nil, fmt.Errorf("%w: fallback change script: %w", ErrScriptBuild, err)
-			}
-			changeLockScript = script.NewFromBytes(firstNodeScript)
-		} else {
-			return nil, fmt.Errorf("%w: change address required for multi-op batch", ErrInvalidParams)
+		// [Audit fix M-4] Always require an explicit change address.
+		// Falling back to a node key is dangerous: node keys are per-file/directory,
+		// not wallet keys, and for OpDelete the node is being destroyed.
+		if len(b.changeAddr) != 20 {
+			return nil, fmt.Errorf("%w: change address required (20-byte P2PKH hash)", ErrInvalidParams)
+		}
+		addr, err := script.NewAddressFromPublicKeyHash(b.changeAddr, true)
+		if err != nil {
+			return nil, fmt.Errorf("%w: change address: %w", ErrScriptBuild, err)
+		}
+		changeLockScript, err := p2pkh.Lock(addr)
+		if err != nil {
+			return nil, fmt.Errorf("%w: change lock script: %w", ErrScriptBuild, err)
 		}
 		sdkTx.Outputs = append(sdkTx.Outputs, &transaction.TransactionOutput{
 			Satoshis:      changeAmount,
@@ -458,4 +468,20 @@ func (b *MutationBatch) AddCreateRoot(rootPub *ec.PublicKey, payload []byte) {
 		PubKey:  rootPub,
 		Payload: payload,
 	})
+}
+
+// opTypeName returns a human-readable name for a BatchOpType.
+func opTypeName(t BatchOpType) string {
+	switch t {
+	case OpCreate:
+		return "OpCreate"
+	case OpUpdate:
+		return "OpUpdate"
+	case OpDelete:
+		return "OpDelete"
+	case OpCreateRoot:
+		return "OpCreateRoot"
+	default:
+		return fmt.Sprintf("BatchOpType(%d)", t)
+	}
 }

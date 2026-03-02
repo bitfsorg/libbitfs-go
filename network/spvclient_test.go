@@ -432,16 +432,6 @@ func TestSyncHeaders_DeserializeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "deserialize header")
 }
 
-// --- bytesEqual tests ---
-
-func TestBytesEqual(t *testing.T) {
-	assert.True(t, bytesEqual([]byte{1, 2, 3}, []byte{1, 2, 3}))
-	assert.False(t, bytesEqual([]byte{1, 2, 3}, []byte{1, 2, 4}))
-	assert.False(t, bytesEqual([]byte{1, 2}, []byte{1, 2, 3}))
-	assert.True(t, bytesEqual(nil, nil))
-	assert.True(t, bytesEqual([]byte{}, []byte{}))
-}
-
 // --- Mock method tests ---
 
 func TestMockBlockchainService_BroadcastTx(t *testing.T) {

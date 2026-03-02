@@ -41,4 +41,13 @@ var (
 
 	// ErrDifficultyChange indicates the header's nBits changed too much from the previous header.
 	ErrDifficultyChange = errors.New("spv: difficulty change exceeds allowed bounds")
+
+	// ErrZeroTarget indicates a zero target value which is invalid for PoW.
+	ErrZeroTarget = errors.New("spv: zero target")
+
+	// ErrInvalidBits indicates an nBits value with out-of-range exponent.
+	ErrInvalidBits = errors.New("spv: invalid compact bits")
+
+	// ErrHeightConflict indicates a different header already exists at the same height.
+	ErrHeightConflict = errors.New("spv: header height conflict")
 )

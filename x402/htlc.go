@@ -234,9 +234,9 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 			if len(fileTxID) > 0 {
 				ftxid = fileTxID[0]
 			}
-			h := method42.ComputeCapsuleHash(ftxid, preimageChunk.Data)
-			if !bytes.Equal(h, expectedCapsuleHash) {
-				continue // Hash mismatch — try next input.
+			h, hErr := method42.ComputeCapsuleHash(ftxid, preimageChunk.Data)
+			if hErr != nil || !bytes.Equal(h, expectedCapsuleHash) {
+				continue // Hash mismatch or invalid input — try next input.
 			}
 		}
 

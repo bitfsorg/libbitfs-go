@@ -107,24 +107,28 @@ func ComputeCapsuleWithNonce(nodePrivateKey *ec.PrivateKey, nodePublicKey *ec.Pu
 	if err != nil {
 		return nil, fmt.Errorf("method42: capsule ECDH(node,node) failed: %w", err)
 	}
+	defer zeroize(sharedNode)
 
 	// 2. aesKey = DeriveAESKey(sharedNode, keyHash)
 	aesKey, err := DeriveAESKey(sharedNode, keyHash)
 	if err != nil {
 		return nil, fmt.Errorf("method42: capsule key derivation failed: %w", err)
 	}
+	defer zeroize(aesKey)
 
 	// 3. sharedBuyer = ECDH(D_node, P_buyer)
 	sharedBuyer, err := ECDH(nodePrivateKey, buyerPublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("method42: capsule ECDH(node,buyer) failed: %w", err)
 	}
+	defer zeroize(sharedBuyer)
 
 	// 4. buyerMask = DeriveBuyerMaskWithNonce(sharedBuyer, keyHash, nonce)
 	buyerMask, err := DeriveBuyerMaskWithNonce(sharedBuyer, keyHash, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("method42: capsule buyer mask derivation failed: %w", err)
 	}
+	defer zeroize(buyerMask)
 
 	// 5. capsule = xorBytes(aesKey, buyerMask)
 	return xorBytes(aesKey, buyerMask), nil
@@ -143,24 +147,26 @@ func xorBytes(a, b []byte) []byte {
 	return out
 }
 
-// ComputeCapsuleHash computes SHA256(fileTxID ‖ capsule) for the HTLC hash lock.
+// ComputeCapsuleHash computes SHA256(fileTxID || capsule) for the HTLC hash lock.
 //
-//	capsule_hash = SHA256(file_txid ‖ capsule)
+//	capsule_hash = SHA256(file_txid || capsule)
 //
 // Binding the capsule hash to the file's transaction ID prevents a malicious
 // seller from reusing a valid capsule across different files. The buyer creates
 // an HTLC locked to this hash. The seller reveals the capsule (preimage) to
 // claim the payment, and the buyer can then use the capsule to derive the
 // decryption key.
-func ComputeCapsuleHash(fileTxID, capsule []byte) []byte {
+//
+// Returns an error if fileTxID or capsule are not exactly 32 bytes.
+func ComputeCapsuleHash(fileTxID, capsule []byte) ([]byte, error) {
 	if len(fileTxID) != 32 {
-		return nil
+		return nil, fmt.Errorf("method42: fileTxID must be 32 bytes, got %d", len(fileTxID))
 	}
 	if len(capsule) != 32 {
-		return nil
+		return nil, fmt.Errorf("method42: capsule must be 32 bytes, got %d", len(capsule))
 	}
 	h := sha256.New()
 	h.Write(fileTxID)
 	h.Write(capsule)
-	return h.Sum(nil)
+	return h.Sum(nil), nil
 }

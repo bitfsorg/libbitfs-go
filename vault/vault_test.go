@@ -542,8 +542,7 @@ func TestRemove_EmptyDirectory_Succeeds(t *testing.T) {
 	require.NotNil(t, emptyDir)
 	require.Empty(t, emptyDir.Children, "/emptydir should have no children")
 
-	// Add fee UTXOs for removal (node delete + parent update).
-	addFeeUTXO(t, eng, 100000)
+	// Add fee UTXO for atomic removal batch (node delete + parent update).
 	addFeeUTXO(t, eng, 100000)
 
 	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/emptydir"})
@@ -558,7 +557,7 @@ func TestRemove_EmptyDirectory_Succeeds(t *testing.T) {
 	}
 }
 
-func TestRemove_ParentUpdateFailure_PreservesState(t *testing.T) {
+func TestRemove_ParentUTXOSpent_FailsAtomically(t *testing.T) {
 	eng, _ := setupCopyTestEngine(t) // gives us root + /test.txt
 
 	rootPubHex, err := eng.getRootPubHex(0)
@@ -573,10 +572,10 @@ func TestRemove_ParentUpdateFailure_PreservesState(t *testing.T) {
 	}
 	require.Contains(t, childrenBefore, "test.txt")
 
-	// Add fee UTXO only for the node deletion TX.
+	// Add fee UTXO for the batch.
 	addFeeUTXO(t, eng, 100000)
 
-	// Mark root's node UTXO as spent so buildParentSelfUpdate fails.
+	// Mark root's node UTXO as spent so atomic batch fails.
 	for _, u := range eng.State.UTXOs {
 		if u.PubKeyHex == rootPubHex && u.Type == "node" && !u.Spent {
 			u.Spent = true
@@ -584,10 +583,9 @@ func TestRemove_ParentUpdateFailure_PreservesState(t *testing.T) {
 	}
 	require.NoError(t, eng.State.Save()) // persist sabotaged state before locked op
 
-	// Remove should still succeed (best-effort), but with a warning.
-	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/test.txt"})
-	require.NoError(t, err)
-	assert.Contains(t, result.Message, "warning")
+	// Atomic remove should fail entirely (no partial state mutation).
+	_, err = eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/test.txt"})
+	require.Error(t, err, "remove should fail when parent UTXO is spent")
 
 	// Parent's children list must still contain test.txt (not mutated).
 	rootAfter := eng.State.GetNode(rootPubHex)
@@ -595,7 +593,7 @@ func TestRemove_ParentUpdateFailure_PreservesState(t *testing.T) {
 	for i, c := range rootAfter.Children {
 		childrenAfter[i] = c.Name
 	}
-	assert.Equal(t, childrenBefore, childrenAfter, "parent children should be unchanged after failed parent update")
+	assert.Equal(t, childrenBefore, childrenAfter, "parent children should be unchanged after failed atomic remove")
 }
 
 func TestRemove_UpdatesParentChildList(t *testing.T) {
@@ -618,8 +616,7 @@ func TestRemove_UpdatesParentChildList(t *testing.T) {
 	}
 	require.True(t, found, "test.txt should be in root children before remove")
 
-	// Add fee UTXOs for both txs (node delete + parent update).
-	addFeeUTXO(t, eng, 100000)
+	// Add fee UTXO for the single atomic batch (node delete + parent update).
 	addFeeUTXO(t, eng, 100000)
 
 	result, err := eng.Remove(&RemoveOpts{VaultIndex: 0, Path: "/test.txt"})
@@ -627,9 +624,8 @@ func TestRemove_UpdatesParentChildList(t *testing.T) {
 	assert.NotEmpty(t, result.TxHex)
 	assert.Contains(t, result.Message, "Removed")
 
-	// Result should contain 2 txs (newline-separated).
-	txParts := strings.Split(result.TxHex, "\n")
-	assert.Len(t, txParts, 2, "Remove should produce 2 txs: node delete + parent update")
+	// Result is a single atomic transaction (not newline-separated).
+	assert.NotContains(t, result.TxHex, "\n", "Remove should produce a single atomic tx")
 
 	// Parent's children list should no longer contain test.txt.
 	rootPubHex, _ := eng.getRootPubHex(0)

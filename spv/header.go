@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/big"
@@ -80,8 +81,29 @@ func ComputeHeaderHash(h *BlockHeader) []byte {
 	return DoubleHash(raw)
 }
 
+// ValidateCompactBits checks that an nBits value has a valid exponent (0..34).
+// Exponents > 34 produce a zero-byte target because the mantissa would be placed
+// entirely outside the 32-byte target buffer. A zero mantissa (with or without
+// the negative flag) is also rejected since it produces a zero target.
+func ValidateCompactBits(bits uint32) error {
+	exponent := bits >> 24
+	mantissa := bits & 0x007fffff
+	if bits&0x00800000 != 0 {
+		mantissa = 0 // negative flag
+	}
+	if exponent > 34 {
+		return fmt.Errorf("%w: exponent %d exceeds maximum 34", ErrInvalidBits, exponent)
+	}
+	if mantissa == 0 {
+		return fmt.Errorf("%w: zero mantissa in bits 0x%08x", ErrInvalidBits, bits)
+	}
+	return nil
+}
+
 // CompactToTarget converts a Bitcoin "compact" (nBits) representation to a 32-byte
 // big-endian target value. Format: 0xEEMMMMMM where EE=exponent, MMMMMM=mantissa.
+// Note: exponent > 34 silently produces a zero target; use ValidateCompactBits
+// to reject such values before calling this function.
 func CompactToTarget(bits uint32) []byte {
 	exponent := bits >> 24
 	mantissa := bits & 0x007fffff
@@ -118,6 +140,10 @@ func VerifyPoW(h *BlockHeader) error {
 	if h == nil {
 		return fmt.Errorf("%w: header", ErrNilParam)
 	}
+	if err := ValidateCompactBits(h.Bits); err != nil {
+		return fmt.Errorf("%w: %w", ErrInsufficientPoW, err)
+	}
+
 	hash := h.Hash
 	if len(hash) == 0 {
 		hash = ComputeHeaderHash(h)
@@ -270,9 +296,12 @@ func ValidateDifficultyTransition(prev, curr *BlockHeader) error {
 	prevTarget := CompactToBig(prev.Bits)
 	currTarget := CompactToBig(curr.Bits)
 
-	// Skip the check if either target is zero (degenerate case).
-	if prevTarget.Sign() <= 0 || currTarget.Sign() <= 0 {
-		return nil
+	// Reject zero targets — they are invalid for difficulty validation.
+	if prevTarget.Sign() <= 0 {
+		return fmt.Errorf("%w: previous header bits 0x%08x", ErrZeroTarget, prev.Bits)
+	}
+	if currTarget.Sign() <= 0 {
+		return fmt.Errorf("%w: current header bits 0x%08x", ErrZeroTarget, curr.Bits)
 	}
 
 	// Verify constraint: currTarget <= prevTarget * maxFactor
@@ -295,6 +324,11 @@ func ValidateDifficultyTransition(prev, curr *BlockHeader) error {
 // VerifyHeaderChainWithWork verifies a header chain (PoW + linkage + difficulty)
 // and returns the cumulative work. The network parameter controls the minimum
 // difficulty check. Pass Regtest for test environments.
+//
+// Note: This function does NOT validate block timestamps (Bitcoin requires
+// timestamp > median of previous 11 blocks and < current time + 2 hours).
+// Timestamp validation is omitted because SPV light clients may not have
+// access to the full preceding header history. The spec does not require it.
 func VerifyHeaderChainWithWork(headers []*BlockHeader, net Network) (*ChainVerificationResult, error) {
 	if len(headers) == 0 {
 		return &ChainVerificationResult{CumulativeWork: new(big.Int)}, nil
@@ -338,10 +372,8 @@ func VerifyHeaderChainWithWork(headers []*BlockHeader, net Network) (*ChainVerif
 			return nil, fmt.Errorf("%w: header at index %d has invalid hash", ErrInvalidHeader, i-1)
 		}
 
-		for j := 0; j < HashSize; j++ {
-			if curr.PrevBlock[j] != prevHash[j] {
-				return nil, fmt.Errorf("%w: header %d PrevBlock does not match header %d hash", ErrChainBroken, i, i-1)
-			}
+		if !bytes.Equal(curr.PrevBlock, prevHash) {
+			return nil, fmt.Errorf("%w: header %d PrevBlock does not match header %d hash", ErrChainBroken, i, i-1)
 		}
 
 		// Validate PoW.
@@ -369,6 +401,11 @@ func VerifyHeaderChainWithWork(headers []*BlockHeader, net Network) (*ChainVerif
 // VerifyHeaderChain checks that a sequence of headers forms a valid chain.
 // Each header's PrevBlock must match the previous header's Hash.
 // Headers must be provided in ascending order (index 0 is earliest).
+//
+// Deprecated: This function does not check minimum network difficulty or
+// difficulty transitions. A chain of regtest-difficulty headers would pass
+// verification. Use VerifyHeaderChainWithWork instead, which validates
+// minimum difficulty and difficulty transitions for a specific network.
 func VerifyHeaderChain(headers []*BlockHeader) error {
 	if len(headers) == 0 {
 		return nil
@@ -404,10 +441,8 @@ func VerifyHeaderChain(headers []*BlockHeader) error {
 			return fmt.Errorf("%w: header at index %d has invalid hash", ErrInvalidHeader, i-1)
 		}
 
-		for j := 0; j < HashSize; j++ {
-			if curr.PrevBlock[j] != prevHash[j] {
-				return fmt.Errorf("%w: header %d PrevBlock does not match header %d hash", ErrChainBroken, i, i-1)
-			}
+		if !bytes.Equal(curr.PrevBlock, prevHash) {
+			return fmt.Errorf("%w: header %d PrevBlock does not match header %d hash", ErrChainBroken, i, i-1)
 		}
 
 		// Validate PoW for each subsequent header.

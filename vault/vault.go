@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 
@@ -18,6 +19,13 @@ import (
 
 // Vault is the shared business logic layer. CLI commands, shell REPL,
 // and daemon adapters all call Vault methods to perform filesystem operations.
+//
+// CONCURRENCY: All mutating methods (Put, Mkdir, Remove, Move, Copy, Link,
+// Sell, Encrypt, Decrypt) acquire an exclusive file-level flock via
+// withWriteLock, which serializes access across both goroutines and processes.
+// Read-only methods (VerifyTx, ResolveVaultIndex, IsOnline) may be called
+// concurrently. Do not call DeriveChangeAddr, AllocateFeeUTXO, or
+// AllocateFeeUTXOWithState outside of withWriteLock. [Audit fix H-1]
 type Vault struct {
 	Wallet   *wallet.Wallet
 	WState   *wallet.WalletState
@@ -28,6 +36,10 @@ type Vault struct {
 	Chain    network.BlockchainService // optional; nil = offline mode
 	SPV      *network.SPVClient        // nil until InitSPV; requires Chain != nil
 	SPVStore *spv.BoltStore            // nil until InitSPV; closed by Close()
+
+	// verifyOnce deduplicates concurrent VerifyTx calls for the same txid,
+	// preventing redundant network requests. [Audit fix M-9]
+	verifyOnce sync.Map // txid string -> *verifyCall
 }
 
 // Result holds the output of a vault operation.
@@ -152,10 +164,21 @@ func (v *Vault) InitSPV() error {
 	return nil
 }
 
+// verifyCall holds the in-flight or completed result of a single VerifyTx call.
+// Used by verifyOnce (sync.Map) to deduplicate concurrent verifications. [Audit fix M-9]
+type verifyCall struct {
+	once   sync.Once
+	result *network.VerifyResult
+	err    error
+}
+
 // VerifyTx performs on-demand SPV verification of a transaction.
 // If the tx was previously verified and has a cached proof, the result is returned
 // immediately without network requests. Otherwise, the proof is fetched from the
 // network and backfilled into the local store.
+//
+// Concurrent calls for the same txid are deduplicated: only one network request
+// is made, and all callers receive the same result. [Audit fix M-9]
 func (v *Vault) VerifyTx(ctx context.Context, txid string) (*network.VerifyResult, error) {
 	if v.SPV == nil {
 		return nil, fmt.Errorf("vault: no blockchain service configured (offline mode)")
@@ -175,7 +198,20 @@ func (v *Vault) VerifyTx(ctx context.Context, txid string) (*network.VerifyResul
 		}
 	}
 
-	// No cached proof — perform network verification.
+	// Deduplicate concurrent VerifyTx calls for the same txid. [Audit fix M-9]
+	callI, _ := v.verifyOnce.LoadOrStore(txid, &verifyCall{})
+	call := callI.(*verifyCall)
+	call.once.Do(func() {
+		call.result, call.err = v.verifyTxNetwork(ctx, txid)
+		// Remove from map so future calls retry (e.g., after transient error).
+		v.verifyOnce.Delete(txid)
+	})
+
+	return call.result, call.err
+}
+
+// verifyTxNetwork performs the actual network verification and backfills the local store.
+func (v *Vault) verifyTxNetwork(ctx context.Context, txid string) (*network.VerifyResult, error) {
 	result, err := v.SPV.VerifyTx(ctx, txid)
 	if err != nil {
 		return nil, err
@@ -240,6 +276,10 @@ func (v *Vault) ResolveVaultIndex(vaultName string) (uint32, error) {
 // DeriveChangeAddr derives a change address (20-byte pubkey hash) from the fee chain.
 // Note: index is incremented eagerly. If the caller's operation fails,
 // the index gap is harmless — HD wallets tolerate gaps in derivation.
+//
+// CONCURRENCY: Must only be called within withWriteLock. The file-level flock
+// serializes access, preventing concurrent read-increment races on
+// WState.NextChangeIndex. [Audit fix H-2]
 func (v *Vault) DeriveChangeAddr() ([]byte, *ec.PrivateKey, error) {
 	idx := v.WState.NextChangeIndex
 	kp, err := v.Wallet.DeriveFeeKey(wallet.InternalChain, idx)
@@ -305,6 +345,11 @@ func (v *Vault) utxoStateToTx(us *UTXOState) (*tx.UTXO, error) {
 }
 
 // lookupPrivKey finds the private key for a UTXO based on its pubkey and type.
+//
+// For fee UTXOs, a fast O(1) path uses stored FeeChain/FeeDerivIdx. The linear
+// scan fallback exists only for legacy UTXOs created before derivation indices
+// were tracked (pre-v0.8). New fee UTXOs always have FeeChain/FeeDerivIdx set
+// via TrackNewUTXOs, TrackBatchUTXOs, and RefreshFeeUTXOs.
 func (v *Vault) lookupPrivKey(pubKeyHex, utxoType string) (*ec.PrivateKey, error) {
 	if utxoType == "fee" {
 		// Try direct lookup via stored derivation index first (O(1)).
@@ -316,7 +361,7 @@ func (v *Vault) lookupPrivKey(pubKeyHex, utxoType string) (*ec.PrivateKey, error
 			}
 		}
 
-		// Fallback: linear scan (for UTXOs saved before the index was added).
+		// Fallback: linear scan for legacy UTXOs without stored derivation indices.
 		for i := uint32(0); i < v.WState.NextReceiveIndex+10; i++ {
 			kp, err := v.Wallet.DeriveFeeKey(wallet.ExternalChain, i)
 			if err != nil {
@@ -518,14 +563,9 @@ func (v *Vault) RefreshFeeUTXOs(ctx context.Context, address, pubKeyHex string, 
 	}
 
 	for _, u := range utxos {
-		exists := false
-		for _, existing := range v.State.UTXOs {
-			if existing.TxID == u.TxID && existing.Vout == u.Vout {
-				exists = true
-				break
-			}
-		}
-		if !exists {
+		// Use the mutex-guarded ContainsUTXO method instead of reading
+		// v.State.UTXOs directly without lock. [Audit fix M-6]
+		if !v.State.ContainsUTXO(u.TxID, u.Vout) {
 			v.State.AddUTXO(&UTXOState{
 				TxID:         u.TxID,
 				Vout:         u.Vout,

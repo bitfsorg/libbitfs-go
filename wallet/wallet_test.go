@@ -777,19 +777,15 @@ func TestWallet_Network(t *testing.T) {
 	assert.Equal(t, &TestNet, w.Network(), "Network() should return pointer to the provided config")
 }
 
-// Edge case: empty password for EncryptSeed/DecryptSeed round-trip.
+// Edge case: empty password for EncryptSeed is rejected.
 func TestEncryptDecryptSeed_EmptyPassword(t *testing.T) {
 	seed := make([]byte, 64)
 	for i := range seed {
 		seed[i] = byte(i + 100)
 	}
 
-	encrypted, err := EncryptSeed(seed, "")
-	require.NoError(t, err)
-
-	decrypted, err := DecryptSeed(encrypted, "")
-	require.NoError(t, err)
-	assert.Equal(t, seed, decrypted, "empty password round-trip should succeed")
+	_, err := EncryptSeed(seed, "")
+	require.ErrorIs(t, err, ErrEmptyPassword)
 }
 
 // Edge case: Unicode password for EncryptSeed/DecryptSeed.

@@ -44,18 +44,14 @@ func TestNewWallet_NilAndEmptySeedReturnsError(t *testing.T) {
 // EncryptSeed/DecryptSeed — empty password round-trip
 // ---------------------------------------------------------------------------
 
-func TestEncryptDecryptSeed_EmptyPassphraseRoundTrip(t *testing.T) {
+func TestEncryptDecryptSeed_EmptyPassphraseRejected(t *testing.T) {
 	mnemonic, err := GenerateMnemonic(Mnemonic12Words)
 	require.NoError(t, err)
 	seed, err := SeedFromMnemonic(mnemonic, "")
 	require.NoError(t, err)
 
-	encrypted, err := EncryptSeed(seed, "")
-	require.NoError(t, err)
-
-	decrypted, err := DecryptSeed(encrypted, "")
-	require.NoError(t, err)
-	assert.Equal(t, seed, decrypted)
+	_, err = EncryptSeed(seed, "")
+	require.ErrorIs(t, err, ErrEmptyPassword)
 }
 
 // ---------------------------------------------------------------------------

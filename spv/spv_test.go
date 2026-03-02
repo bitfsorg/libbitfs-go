@@ -1481,32 +1481,37 @@ func TestComputeMerkleRoot_HighIndex(t *testing.T) {
 // --- Edge case: MemHeaderStore height collision ---
 
 func TestMemHeaderStore_HeightCollision(t *testing.T) {
-	store := NewMemHeaderStore()
+	// M-5: Height collision with a different hash should return ErrHeightConflict.
+	t.Run("different_hash_rejected", func(t *testing.T) {
+		store := NewMemHeaderStore()
 
-	h1 := buildTestHeader(100, makeHash(0x01), makeHash(0x11))
-	h2 := buildTestHeader(100, makeHash(0x02), makeHash(0x22)) // same height, different hash
+		h1 := buildTestHeader(100, makeHash(0x01), makeHash(0x11))
+		h2 := buildTestHeader(100, makeHash(0x02), makeHash(0x22)) // same height, different hash
 
-	require.NoError(t, store.PutHeader(h1))
-	require.NoError(t, store.PutHeader(h2))
+		require.NoError(t, store.PutHeader(h1))
+		err := store.PutHeader(h2)
+		assert.ErrorIs(t, err, ErrHeightConflict,
+			"different header at same height should return ErrHeightConflict")
 
-	// Both should be retrievable by hash
-	got1, err := store.GetHeader(h1.Hash)
-	require.NoError(t, err)
-	assert.Equal(t, h1, got1)
+		// Only the first header should be stored.
+		count, err := store.GetHeaderCount()
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), count)
 
-	got2, err := store.GetHeader(h2.Hash)
-	require.NoError(t, err)
-	assert.Equal(t, h2, got2)
+		// First header still retrievable.
+		got, err := store.GetHeaderByHeight(100)
+		require.NoError(t, err)
+		assert.Equal(t, h1, got)
+	})
 
-	// By height, the second one should overwrite the first
-	gotByHeight, err := store.GetHeaderByHeight(100)
-	require.NoError(t, err)
-	assert.Equal(t, h2, gotByHeight, "later PutHeader at same height should overwrite in byHeight map")
-
-	// Count should be 2 (both in byHash)
-	count, err := store.GetHeaderCount()
-	require.NoError(t, err)
-	assert.Equal(t, uint64(2), count)
+	t.Run("same_hash_returns_duplicate", func(t *testing.T) {
+		store := NewMemHeaderStore()
+		h1 := buildTestHeader(100, makeHash(0x01), makeHash(0x11))
+		require.NoError(t, store.PutHeader(h1))
+		err := store.PutHeader(h1)
+		assert.ErrorIs(t, err, ErrDuplicateHeader,
+			"same hash at same height should return ErrDuplicateHeader")
+	})
 }
 
 // =============================================================================
@@ -1938,10 +1943,31 @@ func TestValidateDifficultyTransition_NilHeaders(t *testing.T) {
 }
 
 func TestValidateDifficultyTransition_ZeroTarget(t *testing.T) {
-	prev := &BlockHeader{Bits: 0x1d000000} // zero mantissa
-	curr := &BlockHeader{Bits: 0x1d00ffff}
-	err := ValidateDifficultyTransition(prev, curr)
-	assert.NoError(t, err, "zero target should be skipped (degenerate case)")
+	// M-1: Zero target should now return an error, not silently pass.
+	t.Run("prev_zero_mantissa", func(t *testing.T) {
+		prev := &BlockHeader{Bits: 0x1d000000} // zero mantissa
+		curr := &BlockHeader{Bits: 0x1d00ffff}
+		err := ValidateDifficultyTransition(prev, curr)
+		assert.ErrorIs(t, err, ErrZeroTarget, "zero prev target should be rejected")
+	})
+	t.Run("curr_zero_mantissa", func(t *testing.T) {
+		prev := &BlockHeader{Bits: 0x1d00ffff}
+		curr := &BlockHeader{Bits: 0x1d000000} // zero mantissa
+		err := ValidateDifficultyTransition(prev, curr)
+		assert.ErrorIs(t, err, ErrZeroTarget, "zero curr target should be rejected")
+	})
+	t.Run("both_zero", func(t *testing.T) {
+		prev := &BlockHeader{Bits: 0x1d000000}
+		curr := &BlockHeader{Bits: 0x1d000000}
+		err := ValidateDifficultyTransition(prev, curr)
+		assert.ErrorIs(t, err, ErrZeroTarget, "both zero targets should be rejected")
+	})
+	t.Run("negative_flag_zero", func(t *testing.T) {
+		prev := &BlockHeader{Bits: 0x1d800000} // negative flag set → mantissa becomes 0
+		curr := &BlockHeader{Bits: 0x1d00ffff}
+		err := ValidateDifficultyTransition(prev, curr)
+		assert.ErrorIs(t, err, ErrZeroTarget, "negative-flag zero target should be rejected")
+	})
 }
 
 // --- MinBitsForNetwork tests ---
@@ -2116,6 +2142,216 @@ func TestWorkForTarget_InverseRelationship(t *testing.T) {
 	ratio := new(big.Int).Div(work1, work2)
 	assert.True(t, ratio.Int64() >= 1 && ratio.Int64() <= 2,
 		"doubling target should roughly halve work, ratio=%d", ratio.Int64())
+}
+
+// --- ValidateCompactBits tests (M-4) ---
+
+func TestValidateCompactBits_Valid(t *testing.T) {
+	validBits := []uint32{
+		0x1d00ffff, // mainnet genesis
+		0x207fffff, // regtest
+		0x1c00ffff, // harder than genesis
+		0x03100000, // small exponent
+	}
+	for _, bits := range validBits {
+		err := ValidateCompactBits(bits)
+		assert.NoError(t, err, "bits 0x%08x should be valid", bits)
+	}
+}
+
+func TestValidateCompactBits_ExponentTooLarge(t *testing.T) {
+	// Exponent 35 (0x23) exceeds maximum 34.
+	err := ValidateCompactBits(0x23010000)
+	assert.ErrorIs(t, err, ErrInvalidBits)
+}
+
+func TestValidateCompactBits_ExponentMaxByte(t *testing.T) {
+	// Exponent 255 (0xFF) — way beyond 34.
+	err := ValidateCompactBits(0xFF010000)
+	assert.ErrorIs(t, err, ErrInvalidBits)
+}
+
+func TestValidateCompactBits_ZeroMantissa(t *testing.T) {
+	// Zero mantissa means zero target.
+	err := ValidateCompactBits(0x1d000000)
+	assert.ErrorIs(t, err, ErrInvalidBits, "zero mantissa should be rejected")
+}
+
+func TestValidateCompactBits_NegativeFlag(t *testing.T) {
+	// Negative flag (bit 23 set) zeroes the mantissa.
+	err := ValidateCompactBits(0x1d800000)
+	assert.ErrorIs(t, err, ErrInvalidBits, "negative flag should produce zero mantissa and be rejected")
+}
+
+func TestValidateCompactBits_Exponent34Valid(t *testing.T) {
+	// Exponent 34 (0x22) is the maximum allowed.
+	err := ValidateCompactBits(0x22010000)
+	assert.NoError(t, err, "exponent 34 should be valid")
+}
+
+// --- VerifyPoW rejects invalid bits (M-4 integration) ---
+
+func TestVerifyPoW_RejectsLargeExponent(t *testing.T) {
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  makeHash(0x00),
+		MerkleRoot: makeHash(0x11),
+		Timestamp:  1700000000,
+		Bits:       0x23010000, // exponent 35
+		Nonce:      0,
+	}
+	h.Hash = ComputeHeaderHash(h)
+	err := VerifyPoW(h)
+	assert.ErrorIs(t, err, ErrInsufficientPoW, "VerifyPoW should reject exponent > 34")
+	assert.ErrorIs(t, err, ErrInvalidBits, "should wrap ErrInvalidBits")
+}
+
+func TestVerifyPoW_RejectsZeroMantissa(t *testing.T) {
+	h := &BlockHeader{
+		Version:    1,
+		PrevBlock:  makeHash(0x00),
+		MerkleRoot: makeHash(0x11),
+		Timestamp:  1700000000,
+		Bits:       0x1d000000, // zero mantissa
+		Nonce:      0,
+	}
+	h.Hash = ComputeHeaderHash(h)
+	err := VerifyPoW(h)
+	assert.ErrorIs(t, err, ErrInsufficientPoW)
+	assert.ErrorIs(t, err, ErrInvalidBits)
+}
+
+// --- VerifyTransactionWithNetwork negative tests (L-1) ---
+
+func TestVerifyTransactionWithNetwork_InvalidTxID(t *testing.T) {
+	tx := &StoredTx{TxID: []byte{0x01, 0x02}} // too short
+	err := VerifyTransactionWithNetwork(tx, NewMemHeaderStore(), Regtest)
+	assert.ErrorIs(t, err, ErrInvalidTxID)
+}
+
+func TestVerifyTransactionWithNetwork_Unconfirmed(t *testing.T) {
+	tx := &StoredTx{TxID: makeHash(0x01), Proof: nil}
+	err := VerifyTransactionWithNetwork(tx, NewMemHeaderStore(), Regtest)
+	assert.ErrorIs(t, err, ErrUnconfirmed)
+}
+
+func TestVerifyTransactionWithNetwork_MismatchTxID(t *testing.T) {
+	proof := &MerkleProof{
+		TxID:      makeHash(0x01),
+		BlockHash: makeHash(0xBB),
+	}
+	tx := &StoredTx{
+		TxID:  makeHash(0x02), // different from proof.TxID
+		Proof: proof,
+	}
+	err := VerifyTransactionWithNetwork(tx, NewMemHeaderStore(), Regtest)
+	assert.ErrorIs(t, err, ErrMerkleProofInvalid)
+}
+
+func TestVerifyTransactionWithNetwork_InvalidBlockHashLength(t *testing.T) {
+	txHash := makeHash(0x42)
+	proof := &MerkleProof{
+		TxID:      txHash,
+		BlockHash: []byte{0x01, 0x02}, // too short
+	}
+	tx := &StoredTx{TxID: txHash, Proof: proof}
+	err := VerifyTransactionWithNetwork(tx, NewMemHeaderStore(), Regtest)
+	assert.ErrorIs(t, err, ErrInvalidHeader)
+}
+
+func TestVerifyTransactionWithNetwork_HeaderNotFound(t *testing.T) {
+	txHash := makeHash(0x42)
+	proof := &MerkleProof{
+		TxID:      txHash,
+		BlockHash: makeHash(0xBB), // not in store
+	}
+	tx := &StoredTx{TxID: txHash, Proof: proof}
+	err := VerifyTransactionWithNetwork(tx, NewMemHeaderStore(), Regtest)
+	assert.ErrorIs(t, err, ErrHeaderNotFound)
+}
+
+func TestVerifyTransactionWithNetwork_RawTxMismatch(t *testing.T) {
+	txHash := makeTxHash(0x42) // DoubleHash([]byte{0x42})
+	proof, merkleRoot := buildTestProof(txHash)
+
+	header := buildTestHeader(100, makeHash(0x00), merkleRoot)
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	require.NoError(t, headerStore.PutHeader(header))
+
+	tx := &StoredTx{
+		TxID:  txHash,
+		RawTx: []byte{0x99}, // wrong raw tx — hash won't match
+		Proof: proof,
+	}
+	err := VerifyTransactionWithNetwork(tx, headerStore, Regtest)
+	assert.ErrorIs(t, err, ErrInvalidTxID, "mismatched RawTx should be rejected")
+}
+
+func TestVerifyTransactionWithNetwork_MerkleRootMismatch(t *testing.T) {
+	txHash := makeTxHash(0x42)
+	proof, _ := buildTestProof(txHash)
+
+	// Header has wrong merkle root.
+	header := buildTestHeader(100, makeHash(0x00), makeHash(0xFF))
+	proof.BlockHash = header.Hash
+
+	headerStore := NewMemHeaderStore()
+	require.NoError(t, headerStore.PutHeader(header))
+
+	tx := &StoredTx{
+		TxID:  txHash,
+		RawTx: []byte{0x42},
+		Proof: proof,
+	}
+	err := VerifyTransactionWithNetwork(tx, headerStore, Regtest)
+	assert.ErrorIs(t, err, ErrMerkleProofInvalid, "wrong merkle root should be rejected")
+}
+
+// --- MemHeaderStore height conflict test (M-5) ---
+
+func TestMemHeaderStore_HeightConflict_ErrorMessage(t *testing.T) {
+	store := NewMemHeaderStore()
+
+	h1 := buildTestHeader(42, makeHash(0x01), makeHash(0x11))
+	require.NoError(t, store.PutHeader(h1))
+
+	h2 := buildTestHeader(42, makeHash(0x02), makeHash(0x22))
+	err := store.PutHeader(h2)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHeightConflict)
+	assert.Contains(t, err.Error(), "height 42")
+}
+
+// --- MemTxStore reverse index test (L-4) ---
+
+func TestMemTxStore_DeleteTxCleansReverse(t *testing.T) {
+	store := NewMemTxStore()
+	txID := makeHash(0x01)
+	pNode := makeHash(0xAA)
+
+	tx := &StoredTx{TxID: txID}
+	require.NoError(t, store.PutTxWithPubKey(tx, pNode))
+
+	// Verify it's indexed.
+	txs, err := store.GetTxsByPubKey(pNode)
+	require.NoError(t, err)
+	require.Len(t, txs, 1)
+
+	// Delete.
+	require.NoError(t, store.DeleteTx(txID))
+
+	// Pubkey index should be empty.
+	txs, err = store.GetTxsByPubKey(pNode)
+	require.NoError(t, err)
+	assert.Nil(t, txs, "pubkey index should be cleaned after delete")
+
+	// Reverse map should be cleaned.
+	store.mu.RLock()
+	_, hasReverse := store.txToPubKeys[hashKey(txID)]
+	store.mu.RUnlock()
+	assert.False(t, hasReverse, "reverse index should be cleaned after delete")
 }
 
 func BenchmarkComputeHeaderHash(b *testing.B) {

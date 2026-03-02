@@ -116,7 +116,7 @@ func FuzzSerializeParseRoundTrip(f *testing.F) {
 
 		// Wrap in valid OP_RETURN pushes for ParseNode
 		pushes := [][]byte{
-			tx.MetaFlagBytes,
+			tx.MetaFlagBytes(),
 			original.PNode,
 			{}, // root node (no parent)
 			payload,

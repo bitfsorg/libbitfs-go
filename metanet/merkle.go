@@ -1,6 +1,7 @@
 package metanet
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/bitfsorg/libbitfs-go/spv"
@@ -123,25 +124,18 @@ func VerifyChildMembership(entry *ChildEntry, proof [][]byte, index int, merkleR
 
 	leafHash := ComputeChildLeafHash(entry)
 
-	// Use spv.ComputeMerkleRoot to walk the proof
+	// Single child case: no proof nodes, leaf hash IS the root.
+	// Handle explicitly before calling spv.ComputeMerkleRoot, which
+	// returns nil for empty proof slices.
+	if len(proof) == 0 && index == 0 {
+		return bytes.Equal(leafHash, merkleRoot)
+	}
+
+	// Multi-child case: walk the proof using spv.ComputeMerkleRoot.
 	computed := spv.ComputeMerkleRoot(leafHash, uint32(index), proof)
 	if computed == nil {
-		// Single child case: no proof nodes, leaf is root
-		if len(proof) == 0 && index == 0 {
-			for i := 0; i < 32; i++ {
-				if leafHash[i] != merkleRoot[i] {
-					return false
-				}
-			}
-			return true
-		}
 		return false
 	}
 
-	for i := 0; i < 32; i++ {
-		if computed[i] != merkleRoot[i] {
-			return false
-		}
-	}
-	return true
+	return bytes.Equal(computed, merkleRoot)
 }

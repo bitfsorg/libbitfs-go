@@ -69,7 +69,11 @@ func (s *MemHeaderStore) PutHeader(header *BlockHeader) error {
 		return fmt.Errorf("%w: header", ErrNilParam)
 	}
 
-	// Compute hash if not set
+	// Compute and set hash under the lock to avoid racing on header.Hash
+	// when the same *BlockHeader is passed from multiple goroutines. [Audit fix L-9]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if len(header.Hash) == 0 {
 		header.Hash = ComputeHeaderHash(header)
 	}
@@ -78,12 +82,17 @@ func (s *MemHeaderStore) PutHeader(header *BlockHeader) error {
 		return fmt.Errorf("%w: header hash must be %d bytes", ErrInvalidHeader, HashSize)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := hashKey(header.Hash)
 	if _, exists := s.byHash[key]; exists {
 		return ErrDuplicateHeader
+	}
+
+	// Check for height collision: different header at same height.
+	if existing, ok := s.byHeight[header.Height]; ok {
+		if !bytes.Equal(existing.Hash, header.Hash) {
+			return fmt.Errorf("%w: height %d already has a different header",
+				ErrHeightConflict, header.Height)
+		}
 	}
 
 	s.byHash[key] = header
@@ -163,16 +172,18 @@ func copyBlockHeader(h *BlockHeader) *BlockHeader {
 
 // MemTxStore is an in-memory implementation of TxStore for testing.
 type MemTxStore struct {
-	mu       sync.RWMutex
-	byTxID   map[string]*StoredTx
-	byPubKey map[string][]*StoredTx
+	mu          sync.RWMutex
+	byTxID      map[string]*StoredTx
+	byPubKey    map[string][]*StoredTx
+	txToPubKeys map[string][]string // reverse index: txID key -> pubkey keys
 }
 
 // NewMemTxStore creates a new in-memory transaction store.
 func NewMemTxStore() *MemTxStore {
 	return &MemTxStore{
-		byTxID:   make(map[string]*StoredTx),
-		byPubKey: make(map[string][]*StoredTx),
+		byTxID:      make(map[string]*StoredTx),
+		byPubKey:    make(map[string][]*StoredTx),
+		txToPubKeys: make(map[string][]string),
 	}
 }
 
@@ -219,12 +230,14 @@ func (s *MemTxStore) PutTxWithPubKey(tx *StoredTx, pNode []byte) error {
 	if len(pNode) > 0 {
 		pkKey := hashKey(pNode)
 		s.byPubKey[pkKey] = append(s.byPubKey[pkKey], tx)
+		s.txToPubKeys[key] = append(s.txToPubKeys[key], pkKey)
 	}
 
 	return nil
 }
 
 // GetTx retrieves a transaction by TxID.
+// Returns a shallow copy to prevent callers from mutating stored data. [Audit fix M-17]
 func (s *MemTxStore) GetTx(txID []byte) (*StoredTx, error) {
 	if len(txID) != HashSize {
 		return nil, fmt.Errorf("%w: TxID must be %d bytes", ErrInvalidTxID, HashSize)
@@ -237,7 +250,8 @@ func (s *MemTxStore) GetTx(txID []byte) (*StoredTx, error) {
 	if !ok {
 		return nil, ErrTxNotFound
 	}
-	return tx, nil
+	cpy := *tx
+	return &cpy, nil
 }
 
 // GetTxsByPubKey returns all transactions related to a P_node public key.
@@ -276,14 +290,23 @@ func (s *MemTxStore) DeleteTx(txID []byte) error {
 
 	delete(s.byTxID, key)
 
-	// Also remove from pubkey index
-	for pk, txs := range s.byPubKey {
-		for i, tx := range txs {
-			if bytes.Equal(tx.TxID, txID) {
-				s.byPubKey[pk] = append(txs[:i], txs[i+1:]...)
-				break
+	// Remove from pubkey index using reverse map (O(k) where k = pubkeys for this tx).
+	// Note: in-place slice rewrite is safe because GetTxsByPubKey returns
+	// a copy of the slice, not the original. [Audit L-10]
+	if pkKeys, ok := s.txToPubKeys[key]; ok {
+		for _, pkKey := range pkKeys {
+			txs := s.byPubKey[pkKey]
+			for i, tx := range txs {
+				if bytes.Equal(tx.TxID, txID) {
+					s.byPubKey[pkKey] = append(txs[:i], txs[i+1:]...)
+					break
+				}
+			}
+			if len(s.byPubKey[pkKey]) == 0 {
+				delete(s.byPubKey, pkKey)
 			}
 		}
+		delete(s.txToPubKeys, key)
 	}
 
 	return nil

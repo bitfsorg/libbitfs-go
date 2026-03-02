@@ -1,6 +1,7 @@
 package spv
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 )
@@ -67,18 +68,18 @@ func VerifyMerkleProof(proof *MerkleProof, expectedMerkleRoot []byte) (bool, err
 		return false, fmt.Errorf("%w: failed to compute merkle root", ErrMerkleProofInvalid)
 	}
 
-	for i := 0; i < 32; i++ {
-		if computedRoot[i] != expectedMerkleRoot[i] {
-			return false, ErrMerkleProofInvalid
-		}
+	if !bytes.Equal(computedRoot, expectedMerkleRoot) {
+		return false, ErrMerkleProofInvalid
 	}
 
 	return true, nil
 }
 
-// BuildMerkleTree builds a full Merkle tree from a list of transaction hashes.
-// Returns all tree levels, where level 0 is leaves and the last level is the root.
-// Each level is padded by duplicating the last element if odd.
+// BuildMerkleTree computes the Merkle root from a list of transaction hashes.
+// Returns a single-element slice containing the 32-byte root hash, or nil if
+// txHashes is empty. Odd-length levels are padded by duplicating the last hash.
+//
+// For a function with a more descriptive name, see ComputeMerkleRootFromTxList.
 func BuildMerkleTree(txHashes [][]byte) [][]byte {
 	if len(txHashes) == 0 {
 		return nil

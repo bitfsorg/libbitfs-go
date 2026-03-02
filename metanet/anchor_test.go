@@ -161,7 +161,7 @@ func TestSerializePayload_AnchorNode_ParseNode(t *testing.T) {
 	pNode := makePubKey(0x01)
 	parentTxID := makeTxID(0x02)
 	pushes := [][]byte{
-		tx.MetaFlagBytes,
+		tx.MetaFlagBytes(),
 		pNode,
 		parentTxID,
 		payload,

@@ -9,8 +9,8 @@ import (
 
 // FuzzParseOPReturnDataNoPanic ensures ParseOPReturnData never panics.
 func FuzzParseOPReturnDataNoPanic(f *testing.F) {
-	f.Add([]byte("meta"), []byte{}, []byte{}, []byte{})
-	f.Add([]byte("meta"), make([]byte, CompressedPubKeyLen), []byte{}, []byte{0x01})
+	f.Add(MetaFlagBytes(), []byte{}, []byte{}, []byte{})
+	f.Add(MetaFlagBytes(), make([]byte, CompressedPubKeyLen), []byte{}, []byte{0x01})
 	f.Add([]byte("xxxx"), make([]byte, CompressedPubKeyLen), make([]byte, TxIDLen), []byte("payload"))
 	f.Add([]byte{}, []byte{}, []byte{}, []byte{})
 

@@ -16,7 +16,8 @@ type RemoveOpts struct {
 	Path       string // remote path to remove
 }
 
-// Remove marks a node as deleted via SelfUpdate transaction.
+// Remove marks a node as deleted via a single atomic batch transaction
+// containing both the node deletion and parent directory update.
 func (v *Vault) Remove(opts *RemoveOpts) (*Result, error) {
 	var result *Result
 	err := v.withWriteLock(func() error {
@@ -39,7 +40,7 @@ func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: directory %q is not empty (%d children)", opts.Path, len(nodeState.Children))
 	}
 
-	// Derive key pair.
+	// Derive key pair for the node being deleted.
 	kp, err := v.Wallet.DeriveNodeKey(nodeState.VaultIndex, nodeState.ChildIndices, nil)
 	if err != nil {
 		return nil, fmt.Errorf("vault: derive key: %w", err)
@@ -58,7 +59,7 @@ func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: serialize payload: %w", err)
 	}
 
-	// Get parent TxID.
+	// Get parent TxID for the node.
 	var parentTxID []byte
 	if nodeState.ParentTxID != "" {
 		parentTxID, err = TxIDBytes(nodeState.ParentTxID)
@@ -67,22 +68,73 @@ func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 		}
 	}
 
-	// Get node UTXO.
+	// Get node UTXO (for the delete op).
 	nodeUTXO, nodeUS, err := v.getNodeUTXOWithState(nodeState.PubKeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("vault: node UTXO: %w", err)
 	}
 
+	// Resolve parent directory for the update op.
+	parentDir := path.Dir(opts.Path)
+	parent, parentErr := v.resolveParentDir(parentDir, opts.VaultIndex)
+	if parentErr != nil {
+		nodeUS.Spent = false
+		return nil, fmt.Errorf("vault: parent directory %q: %w", parentDir, parentErr)
+	}
+
+	// Build new children slice without the removed entry.
+	childName := path.Base(opts.Path)
+	childrenAfter := make([]*ChildState, 0, len(parent.Children))
+	for _, c := range parent.Children {
+		if c.Name != childName {
+			childrenAfter = append(childrenAfter, c)
+		}
+	}
+
+	// Build parent update payload with child removed.
+	origChildren := parent.Children
+	parent.Children = childrenAfter
+	parentPayload, buildErr := v.buildParentUpdatePayload(parent, nil)
+	parent.Children = origChildren // restore
+	if buildErr != nil {
+		nodeUS.Spent = false
+		return nil, fmt.Errorf("vault: parent payload: %w", buildErr)
+	}
+
+	// Derive parent key pair.
+	parentKP, err := v.Wallet.DeriveNodeKey(parent.VaultIndex, parent.ChildIndices, nil)
+	if err != nil {
+		nodeUS.Spent = false
+		return nil, fmt.Errorf("vault: derive parent key: %w", err)
+	}
+	var parentParentTxID []byte
+	if parent.ParentTxID != "" {
+		parentParentTxID, err = TxIDBytes(parent.ParentTxID)
+		if err != nil {
+			nodeUS.Spent = false
+			return nil, err
+		}
+	}
+
+	// Get parent UTXO (for the self-update op).
+	parentUTXO, parentUS, err := v.getNodeUTXOWithState(parent.PubKeyHex)
+	if err != nil {
+		nodeUS.Spent = false
+		return nil, fmt.Errorf("vault: parent UTXO: %w", err)
+	}
+
 	changeAddr, changePriv, err := v.DeriveChangeAddr()
 	if err != nil {
 		nodeUS.Spent = false
+		parentUS.Spent = false
 		return nil, err
 	}
 	changePubHex := hex.EncodeToString(changePriv.PubKey().Compressed())
 
-	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(2000)
+	feeUTXO, feeUS, err := v.AllocateFeeUTXOWithState(3000)
 	if err != nil {
 		nodeUS.Spent = false
+		parentUS.Spent = false
 		return nil, err
 	}
 
@@ -90,12 +142,15 @@ func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 	defer func() {
 		if !success {
 			nodeUS.Spent = false
+			parentUS.Spent = false
 			feeUS.Spent = false
 		}
 	}()
 
+	// Build single atomic batch: OpDelete(node) + OpUpdate(parent).
 	batch := tx.NewMutationBatch()
-	batch.AddSelfUpdate(kp.PublicKey, parentTxID, payload, nodeUTXO, kp.PrivateKey)
+	batch.AddDelete(kp.PublicKey, parentTxID, payload, nodeUTXO, kp.PrivateKey)
+	batch.AddSelfUpdate(parentKP.PublicKey, parentParentTxID, parentPayload, parentUTXO, parentKP.PrivateKey)
 	batch.AddFeeInput(feeUTXO)
 	batch.SetChange(changeAddr)
 
@@ -107,55 +162,18 @@ func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 	success = true
 	txIDHex := hex.EncodeToString(result.TxID)
 
-	// Update local state.
+	// Apply state changes atomically.
 	nodeState.TxID = txIDHex
-	v.TrackBatchUTXOs(result, []string{nodeState.PubKeyHex}, changePubHex)
-
-	// --- Update parent directory to remove child entry ---
-	parentDir := path.Dir(opts.Path)
-	parent, parentErr := v.resolveParentDir(parentDir, opts.VaultIndex)
-	if parentErr != nil {
-		// Best effort: return node-only result with a warning.
-		return &Result{
-			TxHex:   txHex,
-			TxID:    txIDHex,
-			Message: fmt.Sprintf("Removed %s (warning: parent update failed: %v)", opts.Path, parentErr),
-			NodePub: nodeState.PubKeyHex,
-		}, nil
-	}
-
-	// Build new children slice without the removed entry (don't mutate yet).
-	childName := path.Base(opts.Path)
-	childrenAfter := make([]*ChildState, 0, len(parent.Children))
-	for _, c := range parent.Children {
-		if c.Name != childName {
-			childrenAfter = append(childrenAfter, c)
-		}
-	}
-
-	// Temporarily swap children for the build, then restore.
-	origChildren := parent.Children
 	parent.Children = childrenAfter
-	parentTxHex, parentTxIDHex, parentBuildErr := v.buildParentSelfUpdate(parent)
-	parent.Children = origChildren // restore
-	if parentBuildErr != nil {
-		// Best effort: return node-only result with a warning.
-		return &Result{
-			TxHex:   txHex,
-			TxID:    txIDHex,
-			Message: fmt.Sprintf("Removed %s (warning: parent update failed: %v)", opts.Path, parentBuildErr),
-			NodePub: nodeState.PubKeyHex,
-		}, nil
-	}
+	parent.TxID = txIDHex
 
-	// Both TXs succeeded — now apply state changes.
-	parent.Children = childrenAfter
-	parent.TxID = parentTxIDHex
+	// Track batch UTXOs: [0]=delete(nil UTXO), [1]=parent.
+	v.TrackBatchUTXOs(result, []string{"", parent.PubKeyHex}, changePubHex)
 
 	return &Result{
-		TxHex:   txHex + "\n" + parentTxHex,
+		TxHex:   txHex,
 		TxID:    txIDHex,
-		Message: fmt.Sprintf("Removed %s (2 txs: node=%s, parent=%s)", opts.Path, txIDHex[:8], parentTxIDHex[:8]),
+		Message: fmt.Sprintf("Removed %s (atomic: delete+parentUpdate)", opts.Path),
 		NodePub: nodeState.PubKeyHex,
 	}, nil
 }

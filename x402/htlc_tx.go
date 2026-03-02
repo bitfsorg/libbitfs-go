@@ -193,10 +193,25 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 	}
 
 	// Estimate fee using actual HTLC script size.
+	// First estimate without change output to check if change is needed.
 	htlcOutputSize := uint64(8 + 1 + len(htlcScript)) // satoshis + varint + script
 	changeOutputSize := uint64(8 + 1 + 25)            // P2PKH: 8 + varint + OP_DUP..OP_CHECKSIG
-	estSize := uint64(10+len(params.UTXOs)*148) + htlcOutputSize + changeOutputSize
-	estFee := estSize * feeRate
+	baseTxSize := uint64(10+len(params.UTXOs)*148) + htlcOutputSize
+
+	// Estimate with change output first.
+	estSizeWithChange := baseTxSize + changeOutputSize
+	estFeeWithChange := estSizeWithChange * feeRate
+
+	// Determine if a change output is warranted.
+	totalNeededWithChange := htlcAmount + estFeeWithChange
+	var estFee uint64
+	hasChange := totalInput > totalNeededWithChange
+	if hasChange {
+		estFee = estFeeWithChange
+	} else {
+		// No change output: recalculate fee without the change output size.
+		estFee = baseTxSize * feeRate
+	}
 
 	totalNeeded := htlcAmount + estFee
 	if totalInput < totalNeeded {
@@ -227,9 +242,9 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 		Satoshis:      htlcAmount,
 	})
 
-	// Output 1: change (if any).
-	changeAmount := totalInput - htlcAmount - estFee
-	if changeAmount > 0 {
+	// Output 1: change (if any surplus remains after HTLC amount + fee).
+	if hasChange {
+		changeAmount := totalInput - htlcAmount - estFee
 		changeScript, changeErr := buildP2PKHLockScript(params.ChangeAddr)
 		if changeErr != nil {
 			return nil, fmt.Errorf("build change script: %w", changeErr)
@@ -297,7 +312,10 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	if err != nil {
 		return nil, fmt.Errorf("%w: extract capsule hash: %w", ErrInvalidParams, err)
 	}
-	computedHash := method42.ComputeCapsuleHash(params.FileTxID, params.Capsule)
+	computedHash, hashErr := method42.ComputeCapsuleHash(params.FileTxID, params.Capsule)
+	if hashErr != nil {
+		return nil, fmt.Errorf("%w: compute capsule hash: %w", ErrInvalidParams, hashErr)
+	}
 	if !bytes.Equal(computedHash, capsuleHashFromScript) {
 		return nil, fmt.Errorf("%w: capsule hash mismatch", ErrInvalidParams)
 	}
@@ -513,6 +531,22 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 
 	if len(tx.Inputs) == 0 {
 		return nil, fmt.Errorf("%w: pre-signed tx has no inputs", ErrInvalidTx)
+	}
+	if len(tx.Outputs) == 0 {
+		return nil, fmt.Errorf("%w: pre-signed tx has no outputs", ErrInvalidTx)
+	}
+
+	// Validate FundingAmount: must be positive and consistent with pre-signed tx.
+	// The pre-signed refund output = FundingAmount - fee, so FundingAmount must
+	// exceed the output value. A mismatch means FundingAmount is wrong and will
+	// produce an invalid sighash (the transaction won't be broadcastable).
+	if params.FundingAmount == 0 {
+		return nil, fmt.Errorf("%w: funding amount must be greater than zero", ErrInvalidParams)
+	}
+	refundOutput := tx.Outputs[0].Satoshis
+	if params.FundingAmount <= refundOutput {
+		return nil, fmt.Errorf("%w: funding amount %d must exceed refund output %d (difference is the fee)",
+			ErrFundingAmountMismatch, params.FundingAmount, refundOutput)
 	}
 
 	// Verify the pre-signed tx references the expected HTLC funding UTXO.
