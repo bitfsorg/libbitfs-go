@@ -13,9 +13,8 @@ type RPCConfig struct {
 // NetworkPresets contains default RPC configurations for known networks.
 // Mainnet is intentionally omitted to require explicit configuration.
 var NetworkPresets = map[string]RPCConfig{
-	"regtest":     {URL: "http://localhost:18332", User: "bitfs", Password: "bitfs"},
-	"testnet":     {URL: "http://localhost:18333", User: "bitfs", Password: "bitfs"},
-	"teratestnet": {URL: "http://localhost:18334", User: "bitfs", Password: "bitfs"},
+	"regtest": {URL: "http://localhost:18332", User: "bitfs", Password: "bitfs"},
+	"testnet": {URL: "http://localhost:18333", User: "bitfs", Password: "bitfs"},
 }
 
 // ResolveConfig merges RPC configuration from three sources with decreasing priority:

@@ -16,7 +16,6 @@ func TestNetworkPresets(t *testing.T) {
 	}{
 		{"regtest defaults", "regtest", "http://localhost:18332", "bitfs"},
 		{"testnet defaults", "testnet", "http://localhost:18333", "bitfs"},
-		{"teratestnet defaults", "teratestnet", "http://localhost:18334", "bitfs"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

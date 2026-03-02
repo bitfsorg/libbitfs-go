@@ -531,7 +531,6 @@ func TestGetNetwork(t *testing.T) {
 		{"mainnet", "mainnet", false},
 		{"testnet", "testnet", false},
 		{"regtest", "regtest", false},
-		{"teratestnet", "teratestnet", false},
 		{"unknown", "foonet", true},
 	}
 
@@ -739,7 +738,7 @@ func TestDeriveNodeKey_PartialHardenedArray(t *testing.T) {
 		"partial hardened array: index 0 non-hardened, rest default to hardened")
 }
 
-// GAP 11: RegTest and TeraTestNet field-level assertions.
+// GAP 11: RegTest field-level assertions.
 func TestRegTestConfig(t *testing.T) {
 	net, err := GetNetwork("regtest")
 	require.NoError(t, err)
@@ -751,19 +750,6 @@ func TestRegTestConfig(t *testing.T) {
 	assert.Equal(t, uint16(18443), net.RPCPort)
 	assert.Nil(t, net.DNSSeeds, "regtest has no DNS seeds")
 	assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", net.GenesisHash)
-}
-
-func TestTeraTestNetConfig(t *testing.T) {
-	net, err := GetNetwork("teratestnet")
-	require.NoError(t, err)
-
-	assert.Equal(t, "teratestnet", net.Name)
-	assert.Equal(t, byte(0x6f), net.AddressVersion)
-	assert.Equal(t, byte(0xc4), net.P2SHVersion)
-	assert.Equal(t, uint16(0), net.DefaultPort, "teratestnet port is placeholder 0")
-	assert.Equal(t, uint16(0), net.RPCPort, "teratestnet RPC port is placeholder 0")
-	assert.Empty(t, net.DNSSeeds, "teratestnet has no DNS seeds")
-	assert.Empty(t, net.GenesisHash, "teratestnet genesis hash is empty placeholder")
 }
 
 // GAP 12: NewWalletState return value validation.

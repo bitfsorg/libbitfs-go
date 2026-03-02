@@ -39,17 +39,6 @@ var (
 		GenesisHash:    "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943",
 	}
 
-	// TeraTestNet is experimental; parameters pending BSV official confirmation.
-	TeraTestNet = NetworkConfig{
-		Name:           "teratestnet",
-		AddressVersion: 0x6f,
-		P2SHVersion:    0xc4,
-		DefaultPort:    0,
-		RPCPort:        0,
-		DNSSeeds:       []string{},
-		GenesisHash:    "",
-	}
-
 	RegTest = NetworkConfig{
 		Name:           "regtest",
 		AddressVersion: 0x6f,
@@ -63,10 +52,9 @@ var (
 
 // predefined maps network names to their configs.
 var predefined = map[string]*NetworkConfig{
-	"mainnet":     &MainNet,
-	"testnet":     &TestNet,
-	"teratestnet": &TeraTestNet,
-	"regtest":     &RegTest,
+	"mainnet": &MainNet,
+	"testnet": &TestNet,
+	"regtest": &RegTest,
 }
 
 // GetNetwork returns a predefined network by name.

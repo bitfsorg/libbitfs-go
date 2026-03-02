@@ -25,7 +25,7 @@ func ValidateConfig(cfg Config) error {
 		return ErrEmptyDataDir
 	}
 
-	if cfg.Network != "mainnet" && cfg.Network != "testnet" && cfg.Network != "teratestnet" && cfg.Network != "regtest" {
+	if cfg.Network != "mainnet" && cfg.Network != "testnet" && cfg.Network != "regtest" {
 		return ErrInvalidNetwork
 	}
 
