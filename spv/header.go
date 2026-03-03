@@ -151,12 +151,17 @@ func VerifyPoW(h *BlockHeader) error {
 	target := CompactToTarget(h.Bits)
 
 	// Compare hash vs target byte-by-byte in big-endian order (MSB first).
-	// SHA256 output is naturally big-endian.
+	// DoubleHash returns internal (little-endian) byte order; reverse to
+	// big-endian for comparison against the big-endian target.
+	hashBE := make([]byte, 32)
 	for i := 0; i < 32; i++ {
-		if hash[i] < target[i] {
+		hashBE[i] = hash[31-i]
+	}
+	for i := 0; i < 32; i++ {
+		if hashBE[i] < target[i] {
 			return nil // hash < target → valid
 		}
-		if hash[i] > target[i] {
+		if hashBE[i] > target[i] {
 			return fmt.Errorf("%w: hash exceeds target", ErrInsufficientPoW)
 		}
 	}
