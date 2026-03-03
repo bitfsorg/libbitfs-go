@@ -44,25 +44,20 @@ func TestBuildHTLC_DifferentAmounts(t *testing.T) {
 	}
 }
 
-func TestBuildHTLC_ScriptContainsOpcodes(t *testing.T) {
+func TestBuildHTLC_ScriptContainsEmbeddedData(t *testing.T) {
 	params := makeHTLCParams()
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
-	s := script.NewFromBytes(scriptBytes)
-	chunks, err := s.Chunks()
+	// Verify the sCrypt artifact script contains the embedded parameters
+	// at known byte offsets.
+	capsuleHash, err := ExtractCapsuleHashFromHTLC(scriptBytes)
 	require.NoError(t, err)
+	assert.Equal(t, params.CapsuleHash, capsuleHash)
 
-	opcodes := make(map[byte]bool)
-	for _, c := range chunks {
-		opcodes[c.Op] = true
-	}
-	assert.True(t, opcodes[script.OpIF])
-	assert.True(t, opcodes[script.OpELSE])
-	assert.True(t, opcodes[script.OpENDIF])
-	assert.True(t, opcodes[script.OpSHA256])
-	assert.True(t, opcodes[script.OpCHECKSIG])
-	assert.True(t, opcodes[script.OpCHECKMULTISIG])
+	invoiceID, err := ExtractInvoiceIDFromHTLC(scriptBytes)
+	require.NoError(t, err)
+	assert.Equal(t, params.InvoiceID, invoiceID)
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +230,10 @@ func makeHTLCParams() *HTLCParams {
 	for i := 1; i < 33; i++ {
 		sellerPub[i] = byte(i + 50)
 	}
+	invoiceID := make([]byte, InvoiceIDLen)
+	for i := range invoiceID {
+		invoiceID[i] = byte(i + 0xf0)
+	}
 	return &HTLCParams{
 		BuyerPubKey:  buyerPub,
 		SellerPubKey: sellerPub,
@@ -242,5 +241,6 @@ func makeHTLCParams() *HTLCParams {
 		CapsuleHash:  make([]byte, CapsuleHashLen),
 		Amount:       10000,
 		Timeout:      DefaultHTLCTimeout,
+		InvoiceID:    invoiceID,
 	}
 }

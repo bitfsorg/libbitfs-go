@@ -9,11 +9,17 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
+	bsvhash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// hash160ForTest computes HASH160(data) = RIPEMD160(SHA256(data)) for test assertions.
+func hash160ForTest(data []byte) []byte {
+	return bsvhash.Hash160(data)
+}
 
 // --- CalculatePrice Tests ---
 
@@ -277,6 +283,11 @@ func validHTLCParams() *HTLCParams {
 
 	capsuleHash := sha256.Sum256([]byte("test-capsule"))
 
+	invoiceID := make([]byte, InvoiceIDLen)
+	for i := range invoiceID {
+		invoiceID[i] = byte(i + 200)
+	}
+
 	return &HTLCParams{
 		BuyerPubKey:  buyerPub,
 		SellerPubKey: sellerPub,
@@ -284,6 +295,7 @@ func validHTLCParams() *HTLCParams {
 		CapsuleHash:  capsuleHash[:],
 		Amount:       1000,
 		Timeout:      DefaultHTLCTimeout,
+		InvoiceID:    invoiceID,
 	}
 }
 
@@ -293,45 +305,17 @@ func TestBuildHTLC_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, scriptBytes)
 
-	// Parse the script to verify structure
-	s := script.NewFromBytes(scriptBytes)
-	chunks, err := s.Chunks()
+	// Verify the script is large enough to be a valid sCrypt artifact.
+	assert.Greater(t, len(scriptBytes), 100)
+
+	// Verify that the embedded parameters can be extracted.
+	extractedCapsuleHash, err := ExtractCapsuleHashFromHTLC(scriptBytes)
 	require.NoError(t, err)
+	assert.Equal(t, params.CapsuleHash, extractedCapsuleHash)
 
-	// Verify OP_IF is first
-	assert.Equal(t, script.OpIF, chunks[0].Op)
-
-	// Verify OP_SHA256 follows
-	assert.Equal(t, script.OpSHA256, chunks[1].Op)
-
-	// Verify capsule hash is pushed (chunk 2)
-	assert.Equal(t, params.CapsuleHash, chunks[2].Data)
-
-	// Verify OP_EQUALVERIFY
-	assert.Equal(t, script.OpEQUALVERIFY, chunks[3].Op)
-
-	// Find OP_ELSE
-	foundElse := false
-	for _, chunk := range chunks {
-		if chunk.Op == script.OpELSE {
-			foundElse = true
-			break
-		}
-	}
-	assert.True(t, foundElse, "OP_ELSE not found in HTLC script")
-
-	// Find OP_CHECKMULTISIG (buyer refund path uses 2-of-2 multisig)
-	foundMultisig := false
-	for _, chunk := range chunks {
-		if chunk.Op == script.OpCHECKMULTISIG {
-			foundMultisig = true
-			break
-		}
-	}
-	assert.True(t, foundMultisig, "OP_CHECKMULTISIG not found in HTLC script")
-
-	// Verify OP_ENDIF is last
-	assert.Equal(t, script.OpENDIF, chunks[len(chunks)-1].Op)
+	extractedInvoiceID, err := ExtractInvoiceIDFromHTLC(scriptBytes)
+	require.NoError(t, err)
+	assert.Equal(t, params.InvoiceID, extractedInvoiceID)
 }
 
 func TestBuildHTLC_NilParams(t *testing.T) {
@@ -346,9 +330,9 @@ func TestBuildHTLC_InvalidBuyerPubKey(t *testing.T) {
 	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
 }
 
-func TestBuildHTLC_InvalidSellerPubKey(t *testing.T) {
+func TestBuildHTLC_MissingInvoiceID(t *testing.T) {
 	params := validHTLCParams()
-	params.SellerPubKey = []byte{0x03, 0x01} // too short
+	params.InvoiceID = nil // mandatory in sCrypt artifact
 	_, err := BuildHTLC(params)
 	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
 }
@@ -381,33 +365,18 @@ func TestBuildHTLC_ZeroTimeout(t *testing.T) {
 	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
 }
 
-func TestBuildHTLC_ContainsBuyerPubKey(t *testing.T) {
+func TestBuildHTLC_ContainsBuyerPkh(t *testing.T) {
 	params := validHTLCParams()
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
-	s := script.NewFromBytes(scriptBytes)
-	chunks, err := s.Chunks()
-	require.NoError(t, err)
+	// The sCrypt artifact embeds buyerPkh = HASH160(BuyerPubKey) at a known offset.
+	buyerPkh := scriptBytes[htlcBuyerPkhOffset_ : htlcBuyerPkhOffset_+PubKeyHashLen]
+	assert.NotEqual(t, make([]byte, PubKeyHashLen), buyerPkh, "buyerPkh should not be all zeros")
 
-	// Find buyer pubkey in the script
-	found := false
-	for _, chunk := range chunks {
-		if len(chunk.Data) == 33 {
-			match := true
-			for i := range chunk.Data {
-				if chunk.Data[i] != params.BuyerPubKey[i] {
-					match = false
-					break
-				}
-			}
-			if match {
-				found = true
-				break
-			}
-		}
-	}
-	assert.True(t, found, "buyer pubkey not found in HTLC script")
+	// Verify the embedded buyerPkh matches HASH160(BuyerPubKey).
+	expectedPkh := hash160ForTest(params.BuyerPubKey)
+	assert.Equal(t, expectedPkh, buyerPkh)
 }
 
 // --- ParseHTLCPreimage Tests ---
@@ -708,62 +677,14 @@ func TestVerifyPayment_NilLockingScript(t *testing.T) {
 
 // --- Supplementary Tests: BuildHTLC Validation ---
 
-func TestBuildHTLC_ContainsSellerAddr(t *testing.T) {
+func TestBuildHTLC_ContainsSellerPkh(t *testing.T) {
 	params := validHTLCParams()
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
-	s := script.NewFromBytes(scriptBytes)
-	chunks, err := s.Chunks()
-	require.NoError(t, err)
-
-	// Find seller address hash (20 bytes) in the script
-	found := false
-	for _, chunk := range chunks {
-		if len(chunk.Data) == PubKeyHashLen {
-			match := true
-			for i := range chunk.Data {
-				if chunk.Data[i] != params.SellerAddr[i] {
-					match = false
-					break
-				}
-			}
-			if match {
-				found = true
-				break
-			}
-		}
-	}
-	assert.True(t, found, "seller address hash not found in HTLC script")
-}
-
-func TestBuildHTLC_ContainsSellerPubKey(t *testing.T) {
-	params := validHTLCParams()
-	scriptBytes, err := BuildHTLC(params)
-	require.NoError(t, err)
-
-	s := script.NewFromBytes(scriptBytes)
-	chunks, err := s.Chunks()
-	require.NoError(t, err)
-
-	// Find seller pubkey in the 2-of-2 multisig section
-	found := false
-	for _, chunk := range chunks {
-		if len(chunk.Data) == CompressedPubKeyLen {
-			match := true
-			for i := range chunk.Data {
-				if chunk.Data[i] != params.SellerPubKey[i] {
-					match = false
-					break
-				}
-			}
-			if match {
-				found = true
-				break
-			}
-		}
-	}
-	assert.True(t, found, "seller pubkey not found in HTLC script")
+	// The sCrypt artifact embeds sellerPkh (= SellerAddr) at a known offset.
+	sellerPkh := scriptBytes[htlcSellerPkhOffset_ : htlcSellerPkhOffset_+PubKeyHashLen]
+	assert.Equal(t, params.SellerAddr, sellerPkh, "sellerPkh should match SellerAddr")
 }
 
 // --- Supplementary Tests: ParseHTLCPreimage Edge Cases ---
