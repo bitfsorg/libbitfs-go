@@ -102,9 +102,9 @@ func TestParseTxToNodes_MultiOp(t *testing.T) {
 
 	outputs := []tx.TxOutput{
 		{Value: 0, ScriptPubKey: opReturn1},  // vout 0: OP_RETURN (file1)
-		{Value: 1, ScriptPubKey: dustScript},  // vout 1: P2PKH (file1)
+		{Value: 1, ScriptPubKey: dustScript}, // vout 1: P2PKH (file1)
 		{Value: 0, ScriptPubKey: opReturn2},  // vout 2: OP_RETURN (file2)
-		{Value: 1, ScriptPubKey: dustScript},  // vout 3: P2PKH (file2)
+		{Value: 1, ScriptPubKey: dustScript}, // vout 3: P2PKH (file2)
 	}
 
 	txID := make([]byte, TxIDLen)

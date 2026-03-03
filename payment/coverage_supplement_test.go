@@ -115,7 +115,7 @@ func TestParseHTLCPreimage_EmptyPreimageData(t *testing.T) {
 	s := &script.Script{}
 	s.AppendPushData([]byte("sig"))
 	s.AppendPushData([]byte("pubkey"))
-	s.AppendPushData([]byte{}) // empty preimage (third element)
+	s.AppendPushData([]byte{})     // empty preimage (third element)
 	s.AppendOpcodes(script.OpTRUE) // OP_TRUE = claim branch selector
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,

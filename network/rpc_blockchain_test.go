@@ -12,9 +12,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bitfsorg/libbitfs-go/spv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/bitfsorg/libbitfs-go/spv"
 )
 
 // rpcTestServer creates a mock JSON-RPC server for testing RPCClient methods.

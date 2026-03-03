@@ -5,12 +5,12 @@ import (
 	"crypto/sha256"
 	"testing"
 
+	"github.com/bitfsorg/libbitfs-go/method42"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/bitfsorg/libbitfs-go/method42"
 )
 
 // testHTLCInvoiceID returns a deterministic 16-byte invoice ID for tests.

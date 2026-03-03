@@ -64,9 +64,9 @@ func lockFileEx(f *os.File, flags uint32) error {
 	r1, _, err := procLockFileEx.Call(
 		f.Fd(),
 		uintptr(flags),
-		0,                                  // reserved
-		1,                                  // nNumberOfBytesToLockLow
-		0,                                  // nNumberOfBytesToLockHigh
+		0,                                    // reserved
+		1,                                    // nNumberOfBytesToLockLow
+		0,                                    // nNumberOfBytesToLockHigh
 		uintptr(unsafe.Pointer(&overlapped)), //nolint:gosec // required by Windows API
 	)
 	if r1 == 0 {

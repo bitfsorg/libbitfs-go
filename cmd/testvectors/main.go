@@ -17,8 +17,8 @@ import (
 	"github.com/bsv-blockchain/go-sdk/compat/bip39"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 
-	"github.com/bitfsorg/libbitfs-go/method42"
 	"github.com/bitfsorg/libbitfs-go/metanet"
+	"github.com/bitfsorg/libbitfs-go/method42"
 	"github.com/bitfsorg/libbitfs-go/payment"
 	"github.com/bitfsorg/libbitfs-go/revshare"
 	"github.com/bitfsorg/libbitfs-go/spv"

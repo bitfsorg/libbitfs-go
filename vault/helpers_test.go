@@ -3,11 +3,11 @@ package vault
 import (
 	"testing"
 
+	"github.com/bitfsorg/libbitfs-go/metanet"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	bsvhash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/bitfsorg/libbitfs-go/metanet"
 )
 
 func TestDetectMimeType(t *testing.T) {

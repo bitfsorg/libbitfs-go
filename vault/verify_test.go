@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/bitfsorg/libbitfs-go/network"
 	"github.com/bitfsorg/libbitfs-go/spv"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEngineVerifyTx_Offline(t *testing.T) {
