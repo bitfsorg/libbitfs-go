@@ -107,58 +107,58 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 
 	s := &script.Script{}
 	if err := s.AppendPushData(params.InvoiceID); err != nil {
-		return nil, fmt.Errorf("%w: push invoiceId: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: push invoiceId: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpDROP); err != nil {
-		return nil, fmt.Errorf("%w: OP_DROP: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_DROP: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpIF); err != nil {
-		return nil, fmt.Errorf("%w: OP_IF: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_IF: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpSHA256); err != nil {
-		return nil, fmt.Errorf("%w: OP_SHA256: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_SHA256: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendPushData(params.CapsuleHash); err != nil {
-		return nil, fmt.Errorf("%w: push capsuleHash: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: push capsuleHash: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
-		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpDUP); err != nil {
-		return nil, fmt.Errorf("%w: OP_DUP: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_DUP: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpHASH160); err != nil {
-		return nil, fmt.Errorf("%w: OP_HASH160: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_HASH160: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendPushData(params.SellerAddr); err != nil {
-		return nil, fmt.Errorf("%w: push sellerPkh: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: push sellerPkh: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
-		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpCHECKSIG); err != nil {
-		return nil, fmt.Errorf("%w: OP_CHECKSIG: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_CHECKSIG: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpELSE); err != nil {
-		return nil, fmt.Errorf("%w: OP_ELSE: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_ELSE: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpDUP); err != nil {
-		return nil, fmt.Errorf("%w: OP_DUP: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_DUP: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpHASH160); err != nil {
-		return nil, fmt.Errorf("%w: OP_HASH160: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_HASH160: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendPushData(buyerPkh); err != nil {
-		return nil, fmt.Errorf("%w: push buyerPkh: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: push buyerPkh: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
-		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpCHECKSIG); err != nil {
-		return nil, fmt.Errorf("%w: OP_CHECKSIG: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_CHECKSIG: %w", ErrHTLCBuildFailed, err)
 	}
 	if err := s.AppendOpcodes(script.OpENDIF); err != nil {
-		return nil, fmt.Errorf("%w: OP_ENDIF: %v", ErrHTLCBuildFailed, err)
+		return nil, fmt.Errorf("%w: OP_ENDIF: %w", ErrHTLCBuildFailed, err)
 	}
 
 	return s.Bytes(), nil
@@ -260,10 +260,10 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 //	byte[80..104]= OP_DUP OP_HASH160 0x14 buyerPkh(20) OP_EQUALVERIFY OP_CHECKSIG
 //	byte[105]    = 0x68 (OP_ENDIF)
 const (
-	htlcInvoiceIDOffset_   = 1  // byte offset of invoiceId (16 bytes)
-	htlcCapsuleHashOffset_ = 21 // byte offset of capsuleHash (32 bytes)
-	htlcSellerPkhOffset_   = 57 // byte offset of sellerPkh (20 bytes)
-	htlcBuyerPkhOffset_    = 83 // byte offset of buyerPkh (20 bytes)
+	htlcInvoiceIDOffset   = 1  // byte offset of invoiceId (16 bytes)
+	htlcCapsuleHashOffset = 21 // byte offset of capsuleHash (32 bytes)
+	htlcSellerPkhOffset   = 57 // byte offset of sellerPkh (20 bytes)
+	htlcBuyerPkhOffset    = 83 // byte offset of buyerPkh (20 bytes)
 
 	// Exact script length: 106 bytes (fixed, no variable-length timeout).
 	htlcMinScriptLen = 106
@@ -279,7 +279,7 @@ func ExtractCapsuleHashFromHTLC(htlcScript []byte) ([]byte, error) {
 		return nil, fmt.Errorf("HTLC script does not match expected format")
 	}
 	hash := make([]byte, CapsuleHashLen)
-	copy(hash, htlcScript[htlcCapsuleHashOffset_:htlcCapsuleHashOffset_+CapsuleHashLen])
+	copy(hash, htlcScript[htlcCapsuleHashOffset:htlcCapsuleHashOffset+CapsuleHashLen])
 	return hash, nil
 }
 
@@ -294,7 +294,7 @@ func ExtractInvoiceIDFromHTLC(htlcScript []byte) ([]byte, error) {
 		return nil, nil // Not an HTLC script.
 	}
 	id := make([]byte, InvoiceIDLen)
-	copy(id, htlcScript[htlcInvoiceIDOffset_:htlcInvoiceIDOffset_+InvoiceIDLen])
+	copy(id, htlcScript[htlcInvoiceIDOffset:htlcInvoiceIDOffset+InvoiceIDLen])
 	return id, nil
 }
 

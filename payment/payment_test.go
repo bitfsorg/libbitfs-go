@@ -689,7 +689,7 @@ func TestBuildHTLC_ContainsSellerPkh(t *testing.T) {
 	require.NoError(t, err)
 
 	// The plain Bitcoin Script HTLC embeds sellerPkh (= SellerAddr) at a known offset.
-	sellerPkh := scriptBytes[htlcSellerPkhOffset_ : htlcSellerPkhOffset_+PubKeyHashLen]
+	sellerPkh := scriptBytes[htlcSellerPkhOffset : htlcSellerPkhOffset+PubKeyHashLen]
 	assert.Equal(t, params.SellerAddr, sellerPkh, "sellerPkh should match SellerAddr")
 }
 
