@@ -19,6 +19,7 @@ import (
 
 	"github.com/bitfsorg/libbitfs-go/method42"
 	"github.com/bitfsorg/libbitfs-go/metanet"
+	"github.com/bitfsorg/libbitfs-go/payment"
 	"github.com/bitfsorg/libbitfs-go/revshare"
 	"github.com/bitfsorg/libbitfs-go/spv"
 	"github.com/bitfsorg/libbitfs-go/wallet"
@@ -33,6 +34,7 @@ type Vectors struct {
 	MetanetChildEntry ChildEntryVector `json:"metanet_child_entry"`
 	RevshareRegistry  RegistryVector   `json:"revshare_registry"`
 	SPVDoubleHash     DoubleHashVector `json:"spv_double_hash"`
+	PaymentHTLC       HTLCVector       `json:"payment_htlc"`
 }
 
 type ECDHVector struct {
@@ -92,6 +94,19 @@ type RegistryVector struct {
 type DoubleHashVector struct {
 	DataHex string `json:"data_hex"`
 	HashHex string `json:"hash_hex"`
+}
+
+type HTLCVector struct {
+	BuyerPubKeyHex      string `json:"buyer_pubkey_hex"`
+	SellerPubKeyHex     string `json:"seller_pubkey_hex"`
+	SellerPubKeyHashHex string `json:"seller_pubkey_hash_hex"`
+	CapsuleHashHex      string `json:"capsule_hash_hex"`
+	Amount              uint64 `json:"amount"`
+	TimeoutBlocks       uint32 `json:"timeout_blocks"`
+	InvoiceIDHex        string `json:"invoice_id_hex"`
+	ScriptHex           string `json:"script_hex"`
+	ExtractedInvoiceHex string `json:"extracted_invoice_hex"`
+	ExtractedHashHex    string `json:"extracted_hash_hex"`
 }
 
 func must[T any](v T, err error) T {
@@ -231,6 +246,41 @@ func main() {
 	v.SPVDoubleHash = DoubleHashVector{
 		DataHex: hex.EncodeToString(data),
 		HashHex: hex.EncodeToString(dhash),
+	}
+
+	// --- payment_htlc ---
+	// Build an HTLC script using the sCrypt artifact with known deterministic inputs.
+	// Use the same parameters as the TS crosslang test for direct comparison.
+	htlcInvoiceID := must(hex.DecodeString("aabbccddeeff00112233445566778899"))
+	htlcBuyerPubKey := must(hex.DecodeString("030000000000000000000000000000000000000000000000000000000000000001"))
+	htlcSellerPubKey := must(hex.DecodeString("020000000000000000000000000000000000000000000000000000000000000002"))
+	htlcSellerAddr := must(hex.DecodeString("aabbccddee00112233445566778899aabbccddee"))
+	htlcCapsuleHash := must(hex.DecodeString("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"))
+
+	htlcScript := must(payment.BuildHTLC(&payment.HTLCParams{
+		BuyerPubKey:  htlcBuyerPubKey,
+		SellerPubKey: htlcSellerPubKey,
+		SellerAddr:   htlcSellerAddr,
+		CapsuleHash:  htlcCapsuleHash,
+		Amount:       50000,
+		Timeout:      72,
+		InvoiceID:    htlcInvoiceID,
+	}))
+
+	extractedInvoice := must(payment.ExtractInvoiceIDFromHTLC(htlcScript))
+	extractedHash := must(payment.ExtractCapsuleHashFromHTLC(htlcScript))
+
+	v.PaymentHTLC = HTLCVector{
+		BuyerPubKeyHex:      hex.EncodeToString(htlcBuyerPubKey),
+		SellerPubKeyHex:     hex.EncodeToString(htlcSellerPubKey),
+		SellerPubKeyHashHex: hex.EncodeToString(htlcSellerAddr),
+		CapsuleHashHex:      hex.EncodeToString(htlcCapsuleHash),
+		Amount:              50000,
+		TimeoutBlocks:       72,
+		InvoiceIDHex:        hex.EncodeToString(htlcInvoiceID),
+		ScriptHex:           hex.EncodeToString(htlcScript),
+		ExtractedInvoiceHex: hex.EncodeToString(extractedInvoice),
+		ExtractedHashHex:    hex.EncodeToString(extractedHash),
 	}
 
 	// Output JSON
