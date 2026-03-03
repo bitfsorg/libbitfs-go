@@ -395,11 +395,16 @@ func TestParseHTLCPreimage_InvalidTx(t *testing.T) {
 }
 
 func TestParseHTLCPreimage_ValidTx(t *testing.T) {
-	// Build a transaction with a seller-claim unlocking script
+	// Build a transaction with a sCrypt claim unlocking script.
 	tx := transaction.NewTransaction()
 
-	// Create an unlocking script: <sig> <pubkey> <preimage> OP_TRUE
+	// Create an unlocking script: <capsule> <sig> <pubkey> OP_0
 	unlockScript := &script.Script{}
+	// Preimage (32 bytes capsule) -- first element in sCrypt claim format.
+	preimage := make([]byte, 32)
+	preimage[0] = 0xca
+	preimage[1] = 0xfe
+	_ = unlockScript.AppendPushData(preimage)
 	// Dummy signature (71 bytes typical)
 	dummySig := make([]byte, 71)
 	dummySig[0] = 0x30
@@ -408,13 +413,8 @@ func TestParseHTLCPreimage_ValidTx(t *testing.T) {
 	dummyPub := make([]byte, 33)
 	dummyPub[0] = 0x02
 	_ = unlockScript.AppendPushData(dummyPub)
-	// Preimage (32 bytes capsule)
-	preimage := make([]byte, 32)
-	preimage[0] = 0xca
-	preimage[1] = 0xfe
-	_ = unlockScript.AppendPushData(preimage)
-	// OP_TRUE to select IF branch
-	_ = unlockScript.AppendOpcodes(script.OpTRUE)
+	// OP_0 (OP_FALSE) to select claim method (index 0)
+	_ = unlockScript.AppendOpcodes(script.OpFALSE)
 
 	dummyTxID := chainhash.DoubleHashH([]byte("dummy-txid"))
 	input := &transaction.TransactionInput{

@@ -14,18 +14,19 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// ParseHTLCPreimage — OP_1 variant (alias for OP_TRUE)
+// ParseHTLCPreimage — Op0 variant (alias for OP_FALSE, sCrypt claim index 0)
 // ---------------------------------------------------------------------------
 
-func TestParseHTLCPreimage_Op1Variant(t *testing.T) {
+func TestParseHTLCPreimage_Op0Variant(t *testing.T) {
 	tx := transaction.NewTransaction()
-	dummyTxID := chainhash.DoubleHashH([]byte("op1-variant"))
+	dummyTxID := chainhash.DoubleHashH([]byte("op0-variant"))
 
+	// sCrypt claim format: <capsule> <sig> <pubkey> OP_0
 	s := &script.Script{}
+	_ = s.AppendPushData([]byte("capsule-preimage-op0"))
 	_ = s.AppendPushData([]byte("sig"))
 	_ = s.AppendPushData([]byte("pubkey"))
-	_ = s.AppendPushData([]byte("capsule-preimage-op1"))
-	_ = s.AppendOpcodes(script.Op1) // Op1 instead of OpTRUE
+	_ = s.AppendOpcodes(script.Op0) // Op0 = OP_FALSE = claim method selector
 
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,
@@ -38,22 +39,24 @@ func TestParseHTLCPreimage_Op1Variant(t *testing.T) {
 
 	preimage, err := ParseHTLCPreimage(raw, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("capsule-preimage-op1"), preimage)
+	assert.Equal(t, []byte("capsule-preimage-op0"), preimage)
 }
 
 // ---------------------------------------------------------------------------
-// ParseHTLCPreimage — non-OP_TRUE last chunk is skipped
+// ParseHTLCPreimage — non-OP_FALSE last chunk (OP_TRUE = refund) is skipped
 // ---------------------------------------------------------------------------
 
-func TestParseHTLCPreimage_NonOpTrueLastChunk(t *testing.T) {
+func TestParseHTLCPreimage_NonOpFalseLastChunk(t *testing.T) {
 	tx := transaction.NewTransaction()
-	dummyTxID := chainhash.DoubleHashH([]byte("not-true"))
+	dummyTxID := chainhash.DoubleHashH([]byte("not-false"))
 
+	// sCrypt refund format ends with OP_TRUE (method index 1), not OP_FALSE.
+	// ParseHTLCPreimage only looks for OP_FALSE (claim, index 0).
 	s := &script.Script{}
 	_ = s.AppendPushData([]byte("sig"))
 	_ = s.AppendPushData([]byte("pubkey"))
 	_ = s.AppendPushData([]byte("preimage"))
-	_ = s.AppendOpcodes(script.OpFALSE) // Not OP_TRUE -> buyer refund path, not seller claim
+	_ = s.AppendOpcodes(script.OpTRUE) // OP_TRUE -> refund path, not claim
 
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,

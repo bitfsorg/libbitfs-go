@@ -43,7 +43,7 @@ func TestVerifyHTLCFunding(t *testing.T) {
 		SellerAddr:   sellerAddr,
 		CapsuleHash:  capsuleHash,
 		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:    testHTLCInvoiceID(),
 		Timeout:      DefaultHTLCTimeout,
 	})
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 			}},
 			ChangeAddr: changeAddr,
 			FeeRate:    1,
-			InvoiceID:    testHTLCInvoiceID(),
+			InvoiceID:  testHTLCInvoiceID(),
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -177,7 +177,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 			}},
 			ChangeAddr: changeAddr,
 			FeeRate:    1,
-			InvoiceID:    testHTLCInvoiceID(),
+			InvoiceID:  testHTLCInvoiceID(),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, uint64(100), result.HTLCAmount, "amount should pass through without dust adjustment")
@@ -198,7 +198,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 			Timeout:      DefaultHTLCTimeout,
 			UTXOs:        nil,
 			ChangeAddr:   changeAddr,
-   InvoiceID:    testHTLCInvoiceID(),
+			InvoiceID:    testHTLCInvoiceID(),
 		})
 		require.Error(t, err)
 	})
@@ -218,7 +218,7 @@ func TestBuildHTLCFundingTx(t *testing.T) {
 				ScriptPubKey: p2pkhScript,
 			}},
 			ChangeAddr: changeAddr,
-			InvoiceID:    testHTLCInvoiceID(),
+			InvoiceID:  testHTLCInvoiceID(),
 		})
 		require.Error(t, err)
 	})
@@ -254,7 +254,7 @@ func TestBuildHTLCFundingTx_FeeAccountsForScriptSize(t *testing.T) {
 		}},
 		ChangeAddr: changeAddr,
 		FeeRate:    1,
-		InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:  testHTLCInvoiceID(),
 	})
 	require.NoError(t, err)
 
@@ -315,7 +315,7 @@ func TestBuildSellerClaimTx(t *testing.T) {
 		SellerAddr:   sellerAddr,
 		CapsuleHash:  capsuleHash,
 		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:    testHTLCInvoiceID(),
 		Timeout:      DefaultHTLCTimeout,
 	})
 	require.NoError(t, err)
@@ -342,6 +342,24 @@ func TestBuildSellerClaimTx(t *testing.T) {
 		extracted, err := ParseHTLCPreimage(claimTx.Bytes(), nil)
 		require.NoError(t, err)
 		assert.Equal(t, capsule, extracted)
+
+		// Verify sCrypt claim unlocking script format:
+		// <capsule> <sig> <pubkey> OP_0
+		chunks, err := claimTx.Inputs[0].UnlockingScript.Chunks()
+		require.NoError(t, err)
+		require.Len(t, chunks, 4, "claim unlocking script should have 4 chunks")
+
+		// First chunk: capsule preimage data
+		assert.Equal(t, capsule, chunks[0].Data, "first chunk should be capsule preimage")
+
+		// Second chunk: signature (DER + sighash flag)
+		assert.NotEmpty(t, chunks[1].Data, "second chunk should be signature")
+
+		// Third chunk: seller's compressed pubkey (33 bytes)
+		assert.Len(t, chunks[2].Data, CompressedPubKeyLen, "third chunk should be 33-byte pubkey")
+
+		// Fourth chunk: OP_0/OP_FALSE (method selector for claim, index 0)
+		assert.Equal(t, script.OpFALSE, chunks[3].Op, "last chunk should be OP_0 (claim method selector)")
 	})
 
 	t.Run("nil params fields", func(t *testing.T) {
@@ -356,11 +374,13 @@ func TestBuildSellerClaimTx(t *testing.T) {
 	})
 }
 
-func TestBuildSellerPreSignedRefund(t *testing.T) {
-	sellerPriv, err := ec.NewPrivateKey()
+// TestBuildBuyerOnChainRefundTx tests the new on-chain buyer refund path
+// where the buyer can refund unilaterally after timeout using nLockTime.
+func TestBuildBuyerOnChainRefundTx(t *testing.T) {
+	buyerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
 
-	buyerPriv, err := ec.NewPrivateKey()
+	sellerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
 
 	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
@@ -373,231 +393,184 @@ func TestBuildSellerPreSignedRefund(t *testing.T) {
 		SellerAddr:   sellerAddr,
 		CapsuleHash:  capsuleHash,
 		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:    testHTLCInvoiceID(),
 		Timeout:      DefaultHTLCTimeout,
 	})
 	require.NoError(t, err)
 
 	mockTxID := sha256.Sum256([]byte("htlc-funding-txid"))
 
-	t.Run("valid seller pre-sign", func(t *testing.T) {
-		result, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-			FundingTxID:     mockTxID[:],
-			FundingVout:     0,
-			FundingAmount:   50000,
-			HTLCScript:      htlcScript,
-			SellerPrivKey:   sellerPriv,
-			BuyerOutputAddr: buyerAddr,
-			Timeout:         DefaultHTLCTimeout,
-			FeeRate:         1,
-		})
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.NotEmpty(t, result.TxBytes)
-		require.NotEmpty(t, result.SellerSig)
-
-		// Verify the tx structure.
-		tx, err := transaction.NewTransactionFromBytes(result.TxBytes)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(DefaultHTLCTimeout), tx.LockTime)
-		assert.Equal(t, uint32(0xfffffffe), tx.Inputs[0].SequenceNumber)
-	})
-
-	t.Run("nil params", func(t *testing.T) {
-		_, err := BuildSellerPreSignedRefund(nil)
-		require.Error(t, err)
-	})
-
-	t.Run("timeout zero defaults", func(t *testing.T) {
-		result, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-			FundingTxID:     mockTxID[:],
-			FundingVout:     0,
-			FundingAmount:   50000,
-			HTLCScript:      htlcScript,
-			SellerPrivKey:   sellerPriv,
-			BuyerOutputAddr: buyerAddr,
-			Timeout:         0,
-			FeeRate:         1,
-		})
-		require.NoError(t, err)
-		// Verify that zero timeout defaults to DefaultHTLCTimeout.
-		tx, err := transaction.NewTransactionFromBytes(result.TxBytes)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(DefaultHTLCTimeout), tx.LockTime)
-	})
-}
-
-func TestBuildBuyerRefundTx(t *testing.T) {
-	sellerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	buyerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
-	sellerAddr := sellerPriv.PubKey().Hash()
-	buyerAddr := buyerPriv.PubKey().Hash()
-
-	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
-		SellerPubKey: sellerPriv.PubKey().Compressed(),
-		SellerAddr:   sellerAddr,
-		CapsuleHash:  capsuleHash,
-		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
-		Timeout:      DefaultHTLCTimeout,
-	})
-	require.NoError(t, err)
-
-	mockTxID := sha256.Sum256([]byte("htlc-funding-txid"))
-
-	// First, get the seller's pre-signed refund.
-	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-		FundingTxID:     mockTxID[:],
-		FundingVout:     0,
-		FundingAmount:   50000,
-		HTLCScript:      htlcScript,
-		SellerPrivKey:   sellerPriv,
-		BuyerOutputAddr: buyerAddr,
-		Timeout:         DefaultHTLCTimeout,
-		FeeRate:         1,
-	})
-	require.NoError(t, err)
-
-	t.Run("valid buyer refund", func(t *testing.T) {
+	t.Run("valid buyer on-chain refund", func(t *testing.T) {
 		refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			SellerPreSignedTx: preSign.TxBytes,
-			SellerSig:         preSign.SellerSig,
-			HTLCScript:        htlcScript,
-			FundingAmount:     50000,
-			BuyerPrivKey:      buyerPriv,
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       DefaultHTLCTimeout,
+			FeeRate:       1,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, refundTx)
 
-		// Verify nLockTime is set.
-		assert.Equal(t, uint32(DefaultHTLCTimeout), refundTx.LockTime)
+		// Verify nLockTime is set to the timeout.
+		assert.Equal(t, uint32(DefaultHTLCTimeout), refundTx.LockTime,
+			"nLockTime must be set to timeout")
 
-		// Verify the unlocking script has OP_FALSE at end (selects ELSE branch).
+		// Verify sequence number enables nLockTime.
+		assert.Equal(t, uint32(0xfffffffe), refundTx.Inputs[0].SequenceNumber,
+			"sequence must be 0xfffffffe to enable nLockTime")
+
+		// Verify the tx has proper structure.
+		assert.Len(t, refundTx.Inputs, 1)
+		assert.Len(t, refundTx.Outputs, 1)
+		assert.Greater(t, refundTx.Outputs[0].Satoshis, uint64(0))
+
+		// Verify the unlocking script matches sCrypt refund() format:
+		// <sig> <pubkey> <sighash_preimage> OP_1
 		chunks, err := refundTx.Inputs[0].UnlockingScript.Chunks()
 		require.NoError(t, err)
-		lastChunk := chunks[len(chunks)-1]
-		assert.Equal(t, script.OpFALSE, lastChunk.Op)
+		require.Len(t, chunks, 4, "refund unlocking script should have 4 chunks")
 
-		// Verify first chunk is also OP_FALSE/OP_0 (CHECKMULTISIG dummy).
-		assert.Equal(t, script.OpFALSE, chunks[0].Op)
+		// First chunk: buyer's signature (DER + sighash flag)
+		assert.NotEmpty(t, chunks[0].Data, "first chunk should be signature")
 
-		// Verify there are 4 chunks: OP_0 <buyer_sig> <seller_sig> OP_FALSE
-		assert.Len(t, chunks, 4)
+		// Second chunk: buyer's compressed pubkey (33 bytes)
+		assert.Len(t, chunks[1].Data, CompressedPubKeyLen,
+			"second chunk should be 33-byte pubkey")
+		assert.Equal(t, buyerPriv.PubKey().Compressed(), chunks[1].Data,
+			"pubkey should match buyer's key")
+
+		// Third chunk: BIP143 sighash preimage (should be ~180+ bytes)
+		assert.Greater(t, len(chunks[2].Data), 100,
+			"third chunk should be BIP143 sighash preimage (>100 bytes)")
+
+		// Fourth chunk: OP_1/OP_TRUE (method selector for refund, index 1)
+		assert.Equal(t, script.OpTRUE, chunks[3].Op,
+			"last chunk should be OP_1 (refund method selector)")
 	})
 
 	t.Run("nil params", func(t *testing.T) {
 		_, err := BuildBuyerRefundTx(nil)
 		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidParams)
 	})
 
-	t.Run("empty pre-signed tx", func(t *testing.T) {
+	t.Run("nil buyer private key", func(t *testing.T) {
 		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			SellerPreSignedTx: nil,
-			SellerSig:         preSign.SellerSig,
-			HTLCScript:        htlcScript,
-			FundingAmount:     50000,
-			BuyerPrivKey:      buyerPriv,
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  nil,
+			OutputAddr:    buyerAddr,
+			Timeout:       DefaultHTLCTimeout,
 		})
 		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidParams)
 	})
-}
 
-func TestBuildBuyerRefundTx_FundingVerification(t *testing.T) {
-	sellerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	buyerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
-	sellerAddr := sellerPriv.PubKey().Hash()
-	buyerAddr := buyerPriv.PubKey().Hash()
-
-	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
-		SellerPubKey: sellerPriv.PubKey().Compressed(),
-		SellerAddr:   sellerAddr,
-		CapsuleHash:  capsuleHash,
-		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
-		Timeout:      DefaultHTLCTimeout,
+	t.Run("empty HTLC script", func(t *testing.T) {
+		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    nil,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       DefaultHTLCTimeout,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidParams)
 	})
-	require.NoError(t, err)
 
-	mockTxID := sha256.Sum256([]byte("htlc-funding-txid"))
-
-	// Get the seller's pre-signed refund.
-	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-		FundingTxID:     mockTxID[:],
-		FundingVout:     0,
-		FundingAmount:   50000,
-		HTLCScript:      htlcScript,
-		SellerPrivKey:   sellerPriv,
-		BuyerOutputAddr: buyerAddr,
-		Timeout:         DefaultHTLCTimeout,
-		FeeRate:         1,
+	t.Run("zero funding amount", func(t *testing.T) {
+		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 0,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       DefaultHTLCTimeout,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidParams)
+		assert.Contains(t, err.Error(), "funding amount must be greater than zero")
 	})
-	require.NoError(t, err)
 
-	t.Run("correct FundingTxID passes", func(t *testing.T) {
+	t.Run("funding amount too small for fee", func(t *testing.T) {
+		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 100, // too small for any fee
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       DefaultHTLCTimeout,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInsufficientPayment)
+	})
+
+	t.Run("timeout zero defaults", func(t *testing.T) {
 		refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			SellerPreSignedTx: preSign.TxBytes,
-			SellerSig:         preSign.SellerSig,
-			HTLCScript:        htlcScript,
-			FundingAmount:     50000,
-			BuyerPrivKey:      buyerPriv,
-			FundingTxID:       mockTxID[:],
-			FundingVout:       0,
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       0,
 		})
 		require.NoError(t, err)
-		require.NotNil(t, refundTx)
+		assert.Equal(t, uint32(DefaultHTLCTimeout), refundTx.LockTime,
+			"zero timeout should default to DefaultHTLCTimeout")
 	})
 
-	t.Run("nil FundingTxID skips check", func(t *testing.T) {
+	t.Run("custom timeout", func(t *testing.T) {
 		refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			SellerPreSignedTx: preSign.TxBytes,
-			SellerSig:         preSign.SellerSig,
-			HTLCScript:        htlcScript,
-			FundingAmount:     50000,
-			BuyerPrivKey:      buyerPriv,
-			// FundingTxID not set — should skip verification.
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       100,
 		})
 		require.NoError(t, err)
-		require.NotNil(t, refundTx)
+		assert.Equal(t, uint32(100), refundTx.LockTime)
 	})
 
-	t.Run("wrong FundingTxID rejected", func(t *testing.T) {
-		wrongTxID := bytes.Repeat([]byte{0xff}, 32)
-
+	t.Run("below minimum timeout rejected", func(t *testing.T) {
 		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			SellerPreSignedTx: preSign.TxBytes,
-			SellerSig:         preSign.SellerSig,
-			HTLCScript:        htlcScript,
-			FundingAmount:     50000,
-			BuyerPrivKey:      buyerPriv,
-			FundingTxID:       wrongTxID,
-			FundingVout:       0,
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       MinHTLCTimeout - 1,
 		})
-		assert.ErrorIs(t, err, ErrFundingMismatch)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidParams)
+		assert.Contains(t, err.Error(), "below minimum")
 	})
 
-	t.Run("wrong FundingVout rejected", func(t *testing.T) {
+	t.Run("above maximum timeout rejected", func(t *testing.T) {
 		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
-			SellerPreSignedTx: preSign.TxBytes,
-			SellerSig:         preSign.SellerSig,
-			HTLCScript:        htlcScript,
-			FundingAmount:     50000,
-			BuyerPrivKey:      buyerPriv,
-			FundingTxID:       mockTxID[:], // correct TxID
-			FundingVout:       99,          // wrong vout
+			FundingTxID:   mockTxID[:],
+			FundingVout:   0,
+			FundingAmount: 50000,
+			HTLCScript:    htlcScript,
+			BuyerPrivKey:  buyerPriv,
+			OutputAddr:    buyerAddr,
+			Timeout:       MaxHTLCTimeout + 1,
 		})
-		assert.ErrorIs(t, err, ErrFundingMismatch)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidParams)
+		assert.Contains(t, err.Error(), "exceeds maximum")
 	})
 }
 
@@ -653,7 +626,7 @@ func TestHTLCRoundTrip(t *testing.T) {
 		}},
 		ChangeAddr: buyerAddr,
 		FeeRate:    1,
-		InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:  testHTLCInvoiceID(),
 	})
 	require.NoError(t, err)
 
@@ -694,7 +667,8 @@ func TestHTLCRoundTrip(t *testing.T) {
 	t.Logf("HTLC round-trip: encrypt -> fund -> claim -> extract -> decrypt OK (%d bytes)", len(plaintext))
 }
 
-// TestHTLCBuyerRefundRoundTrip tests the buyer refund path via pre-signed 2-of-2 multisig.
+// TestHTLCBuyerRefundRoundTrip tests the on-chain buyer refund path.
+// The buyer can refund without any seller cooperation after the timeout.
 func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	sellerPriv, err := ec.NewPrivateKey()
 	require.NoError(t, err)
@@ -725,30 +699,20 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 		}},
 		ChangeAddr: buyerAddr,
 		FeeRate:    1,
-		InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:  testHTLCInvoiceID(),
 	})
 	require.NoError(t, err)
 
-	// Seller pre-signs refund.
-	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-		FundingTxID:     fundingResult.TxID,
-		FundingVout:     fundingResult.HTLCVout,
-		FundingAmount:   fundingResult.HTLCAmount,
-		HTLCScript:      fundingResult.HTLCScript,
-		SellerPrivKey:   sellerPriv,
-		BuyerOutputAddr: buyerAddr,
-		Timeout:         DefaultHTLCTimeout,
-		FeeRate:         1,
-	})
-	require.NoError(t, err)
-
-	// Buyer counter-signs refund.
+	// Buyer builds refund tx unilaterally (no seller cooperation needed).
 	refundTx, err := BuildBuyerRefundTx(&BuyerRefundParams{
-		SellerPreSignedTx: preSign.TxBytes,
-		SellerSig:         preSign.SellerSig,
-		HTLCScript:        fundingResult.HTLCScript,
-		FundingAmount:     fundingResult.HTLCAmount,
-		BuyerPrivKey:      buyerPriv,
+		FundingTxID:   fundingResult.TxID,
+		FundingVout:   fundingResult.HTLCVout,
+		FundingAmount: fundingResult.HTLCAmount,
+		HTLCScript:    fundingResult.HTLCScript,
+		BuyerPrivKey:  buyerPriv,
+		OutputAddr:    buyerAddr,
+		Timeout:       DefaultHTLCTimeout,
+		FeeRate:       1,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, refundTx)
@@ -756,11 +720,11 @@ func TestHTLCBuyerRefundRoundTrip(t *testing.T) {
 	assert.Equal(t, uint32(DefaultHTLCTimeout), refundTx.LockTime)
 	assert.Equal(t, uint32(0xfffffffe), refundTx.Inputs[0].SequenceNumber)
 
-	// Verify no preimage is extractable (refund path has no capsule).
+	// Verify no capsule preimage is extractable (refund path has no capsule).
 	_, err = ParseHTLCPreimage(refundTx.Bytes(), nil)
 	assert.Error(t, err, "refund tx should not contain a capsule preimage")
 
-	t.Logf("HTLC buyer refund round-trip OK")
+	t.Logf("HTLC buyer on-chain refund round-trip OK")
 }
 
 func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
@@ -782,12 +746,12 @@ func TestBuildSellerClaimTx_RejectsWrongCapsule(t *testing.T) {
 		SellerAddr:   sellerAddr,
 		CapsuleHash:  capsuleHash,
 		Amount:       50000,
-  InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:    testHTLCInvoiceID(),
 		Timeout:      DefaultHTLCTimeout,
 	})
 	require.NoError(t, err)
 
-	// Wrong capsule — hash won't match what's in the HTLC script.
+	// Wrong capsule -- hash won't match what's in the HTLC script.
 	wrongCapsule := bytes.Repeat([]byte{0xba}, 32)
 
 	_, err = BuildSellerClaimTx(&SellerClaimParams{
@@ -848,7 +812,7 @@ func TestParseHTLCPreimage_WithHashVerification(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// ParseHTLCPreimage verifies SHA256(fileTxID ‖ preimage) against expectedCapsuleHash.
+	// ParseHTLCPreimage verifies SHA256(fileTxID || preimage) against expectedCapsuleHash.
 	// When fileTxID is provided, the hash includes the file identity binding.
 
 	// Correct hash with fileTxID: should succeed.
@@ -1197,7 +1161,7 @@ func TestBuildHTLCFundingTx_TimeoutDefaults(t *testing.T) {
 			}},
 			ChangeAddr: buyerPKH,
 			FeeRate:    1,
-			InvoiceID:    testHTLCInvoiceID(),
+			InvoiceID:  testHTLCInvoiceID(),
 		}
 	}
 
@@ -1246,82 +1210,6 @@ func TestBuildHTLCFundingTx_TimeoutDefaults(t *testing.T) {
 		params := baseParams()
 		params.Timeout = MaxHTLCTimeout + 1
 		_, err := BuildHTLCFundingTx(params)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidParams)
-		assert.Contains(t, err.Error(), "exceeds maximum")
-	})
-}
-
-func TestBuildSellerPreSignedRefund_TimeoutBounds(t *testing.T) {
-	sellerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	buyerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
-	sellerAddr := sellerPriv.PubKey().Hash()
-	buyerAddr := buyerPriv.PubKey().Hash()
-
-	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
-		SellerPubKey: sellerPriv.PubKey().Compressed(),
-		SellerAddr:   sellerAddr,
-		CapsuleHash:  capsuleHash,
-		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
-		Timeout:      DefaultHTLCTimeout,
-	})
-	require.NoError(t, err)
-
-	mockTxID := make([]byte, 32)
-	mockTxID[0] = 0x02
-
-	baseParams := func() *SellerPreSignParams {
-		return &SellerPreSignParams{
-			FundingTxID:     mockTxID,
-			FundingVout:     0,
-			FundingAmount:   50000,
-			HTLCScript:      htlcScript,
-			SellerPrivKey:   sellerPriv,
-			BuyerOutputAddr: buyerAddr,
-			FeeRate:         1,
-		}
-	}
-
-	t.Run("zero defaults to DefaultHTLCTimeout", func(t *testing.T) {
-		params := baseParams()
-		params.Timeout = 0
-		result, err := BuildSellerPreSignedRefund(params)
-		require.NoError(t, err)
-		tx, err := transaction.NewTransactionFromBytes(result.TxBytes)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(DefaultHTLCTimeout), tx.LockTime)
-	})
-
-	t.Run("custom timeout within bounds", func(t *testing.T) {
-		params := baseParams()
-		params.Timeout = 48
-		result, err := BuildSellerPreSignedRefund(params)
-		require.NoError(t, err)
-		tx, err := transaction.NewTransactionFromBytes(result.TxBytes)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(48), tx.LockTime)
-	})
-
-	t.Run("below minimum rejected", func(t *testing.T) {
-		params := baseParams()
-		params.Timeout = MinHTLCTimeout - 1
-		_, err := BuildSellerPreSignedRefund(params)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidParams)
-		assert.Contains(t, err.Error(), "below minimum")
-	})
-
-	t.Run("above maximum rejected", func(t *testing.T) {
-		params := baseParams()
-		params.Timeout = MaxHTLCTimeout + 1
-		_, err := BuildSellerPreSignedRefund(params)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidParams)
 		assert.Contains(t, err.Error(), "exceeds maximum")
@@ -1406,7 +1294,7 @@ func TestBuildHTLCFundingTx_NoChangeOutput(t *testing.T) {
 		}},
 		ChangeAddr: buyerPKH,
 		FeeRate:    1,
-		InvoiceID:    testHTLCInvoiceID(),
+		InvoiceID:  testHTLCInvoiceID(),
 	})
 	require.NoError(t, err)
 
@@ -1415,107 +1303,6 @@ func TestBuildHTLCFundingTx_NoChangeOutput(t *testing.T) {
 	require.NoError(t, parseErr)
 	assert.Len(t, tx.Outputs, 1, "should have only HTLC output when no change")
 	assert.Equal(t, htlcAmount, tx.Outputs[0].Satoshis)
-}
-
-// --- M-5: BuildBuyerRefundTx FundingAmount validation ---
-
-func TestBuildBuyerRefundTx_ZeroFundingAmount(t *testing.T) {
-	buyerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	sellerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
-	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
-		SellerPubKey: sellerPriv.PubKey().Compressed(),
-		SellerAddr:   sellerPriv.PubKey().Hash(),
-		CapsuleHash:  capsuleHash,
-		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
-		Timeout:      DefaultHTLCTimeout,
-	})
-	require.NoError(t, err)
-
-	// Build a pre-signed refund tx with valid funding amount.
-	mockTxID := make([]byte, 32)
-	mockTxID[0] = 0x01
-	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-		FundingTxID:     mockTxID,
-		FundingVout:     0,
-		FundingAmount:   50000,
-		HTLCScript:      htlcScript,
-		SellerPrivKey:   sellerPriv,
-		BuyerOutputAddr: buyerPriv.PubKey().Hash(),
-		Timeout:         DefaultHTLCTimeout,
-		FeeRate:         1,
-	})
-	require.NoError(t, err)
-
-	// Attempt to build buyer refund with zero FundingAmount.
-	_, err = BuildBuyerRefundTx(&BuyerRefundParams{
-		SellerPreSignedTx: preSign.TxBytes,
-		SellerSig:         preSign.SellerSig,
-		HTLCScript:        htlcScript,
-		FundingAmount:     0,
-		BuyerPrivKey:      buyerPriv,
-		FundingTxID:       mockTxID,
-		FundingVout:       0,
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidParams)
-	assert.Contains(t, err.Error(), "funding amount must be greater than zero")
-}
-
-func TestBuildBuyerRefundTx_FundingAmountMismatch(t *testing.T) {
-	buyerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	sellerPriv, err := ec.NewPrivateKey()
-	require.NoError(t, err)
-
-	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
-	htlcScript, err := BuildHTLC(&HTLCParams{
-		BuyerPubKey:  buyerPriv.PubKey().Compressed(),
-		SellerPubKey: sellerPriv.PubKey().Compressed(),
-		SellerAddr:   sellerPriv.PubKey().Hash(),
-		CapsuleHash:  capsuleHash,
-		Amount:       1000,
-  InvoiceID:    testHTLCInvoiceID(),
-		Timeout:      DefaultHTLCTimeout,
-	})
-	require.NoError(t, err)
-
-	// Build a pre-signed refund tx with FundingAmount=1000.
-	mockTxID := make([]byte, 32)
-	mockTxID[0] = 0x01
-	preSign, err := BuildSellerPreSignedRefund(&SellerPreSignParams{
-		FundingTxID:     mockTxID,
-		FundingVout:     0,
-		FundingAmount:   50000,
-		HTLCScript:      htlcScript,
-		SellerPrivKey:   sellerPriv,
-		BuyerOutputAddr: buyerPriv.PubKey().Hash(),
-		Timeout:         DefaultHTLCTimeout,
-		FeeRate:         1,
-	})
-	require.NoError(t, err)
-
-	// Attempt with FundingAmount that is too low (less than the refund output).
-	// The pre-signed tx output should be ~800 sats (1000 - fee~200).
-	// So a FundingAmount of 500 should fail the cross-validation.
-	_, err = BuildBuyerRefundTx(&BuyerRefundParams{
-		SellerPreSignedTx: preSign.TxBytes,
-		SellerSig:         preSign.SellerSig,
-		HTLCScript:        htlcScript,
-		FundingAmount:     500,
-		BuyerPrivKey:      buyerPriv,
-		FundingTxID:       mockTxID,
-		FundingVout:       0,
-	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFundingAmountMismatch)
 }
 
 // buildTestP2PKHScript creates a P2PKH locking script for testing.

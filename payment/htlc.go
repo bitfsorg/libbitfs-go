@@ -119,12 +119,12 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 }
 
 // ParseHTLCPreimage extracts the capsule (preimage) from a spent HTLC input.
-// The spending transaction's unlocking script for the seller claim path is:
+// The spending transaction's unlocking script for the sCrypt claim() path is:
 //
-//	<sig> <seller_pubkey> <capsule> OP_TRUE
+//	<capsule_preimage> <sig> <pubkey> OP_0
 //
-// Where OP_TRUE selects the IF branch.
-// If expectedCapsuleHash is non-nil, verifies SHA256(fileTxID ‖ preimage) matches before returning.
+// Where OP_0 is the method selector (claim has index 0).
+// If expectedCapsuleHash is non-nil, verifies SHA256(fileTxID || preimage) matches before returning.
 // fileTxID binds the capsule hash to the file's transaction identity.
 func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID ...[]byte) ([]byte, error) {
 	if len(spendingTx) == 0 {
@@ -136,7 +136,7 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 		return nil, fmt.Errorf("%w: %w", ErrInvalidTx, err)
 	}
 
-	// Look through all inputs for an HTLC spend
+	// Look through all inputs for an HTLC spend.
 	for _, input := range tx.Inputs {
 		if input.UnlockingScript == nil {
 			continue
@@ -147,20 +147,20 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 			continue
 		}
 
-		// Seller claim unlocking script: <sig> <pubkey> <preimage> OP_TRUE
-		// We expect at least 4 chunks: sig, pubkey, preimage, OP_TRUE
+		// sCrypt claim unlocking script: <capsule> <sig> <pubkey> OP_0
+		// We expect exactly 4 chunks.
 		if len(chunks) < 4 {
 			continue
 		}
 
-		// The last chunk should be OP_TRUE (0x51) selecting the IF branch
+		// The last chunk should be OP_0/OP_FALSE (0x00) selecting claim method (index 0).
 		lastChunk := chunks[len(chunks)-1]
-		if lastChunk.Op != script.OpTRUE && lastChunk.Op != script.Op1 {
+		if lastChunk.Op != script.OpFALSE && lastChunk.Op != script.Op0 {
 			continue
 		}
 
-		// The preimage is the third-from-last element (before OP_TRUE)
-		preimageChunk := chunks[len(chunks)-2]
+		// The capsule preimage is the first element (chunks[0]).
+		preimageChunk := chunks[0]
 		if len(preimageChunk.Data) == 0 {
 			continue
 		}

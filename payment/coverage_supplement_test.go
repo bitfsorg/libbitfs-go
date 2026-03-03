@@ -110,11 +110,12 @@ func TestParseHTLCPreimage_NilUnlockingScript(t *testing.T) {
 func TestParseHTLCPreimage_EmptyPreimageData(t *testing.T) {
 	tx := transaction.NewTransaction()
 	dummyTxID := chainhash.DoubleHashH([]byte("empty-preimage"))
+	// sCrypt claim format: <capsule> <sig> <pubkey> OP_0
 	s := &script.Script{}
+	s.AppendPushData([]byte{}) // empty preimage (first element)
 	s.AppendPushData([]byte("sig"))
 	s.AppendPushData([]byte("pubkey"))
-	s.AppendPushData([]byte{}) // empty preimage
-	s.AppendOpcodes(script.OpTRUE)
+	s.AppendOpcodes(script.OpFALSE) // OP_0 = claim method selector
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,
 		SourceTxOutIndex: 0,
@@ -138,13 +139,14 @@ func TestParseHTLCPreimage_MultipleInputsSecondMatches(t *testing.T) {
 		UnlockingScript:  s1,
 	})
 
-	// Second input: valid HTLC spend pattern.
+	// Second input: valid sCrypt claim spend pattern.
+	// Format: <capsule> <sig> <pubkey> OP_0
 	dummyTxID2 := chainhash.DoubleHashH([]byte("input2"))
 	s2 := &script.Script{}
+	s2.AppendPushData([]byte("capsule-preimage"))
 	s2.AppendPushData([]byte("signature"))
 	s2.AppendPushData([]byte("pubkey"))
-	s2.AppendPushData([]byte("capsule-preimage"))
-	s2.AppendOpcodes(script.OpTRUE)
+	s2.AppendOpcodes(script.OpFALSE) // OP_0 = claim method selector
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID2,
 		SourceTxOutIndex: 0,

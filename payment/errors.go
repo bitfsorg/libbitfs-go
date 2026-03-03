@@ -30,14 +30,6 @@ var (
 	// ErrMissingHeaders indicates required payment headers are missing.
 	ErrMissingHeaders = errors.New("payment: missing payment headers")
 
-	// ErrFundingMismatch indicates the pre-signed refund tx references a different
-	// HTLC funding UTXO than the buyer expected.
-	ErrFundingMismatch = errors.New("payment: funding UTXO mismatch")
-
 	// ErrPriceOverflow indicates that the price calculation overflowed uint64.
 	ErrPriceOverflow = errors.New("payment: price calculation overflow")
-
-	// ErrFundingAmountMismatch indicates the provided FundingAmount does not match
-	// the actual HTLC output value in the pre-signed transaction.
-	ErrFundingAmountMismatch = errors.New("payment: funding amount mismatch")
 )
