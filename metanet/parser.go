@@ -165,6 +165,41 @@ func ParseNodeFromPushesWithOutpoint(pushes [][]byte, txID []byte, vout uint32) 
 	return node, nil
 }
 
+// ParseTxToNodes parses all Metanet node operations from a transaction's
+// outputs and returns fully populated Node objects with TxID and Vout set.
+//
+// For non-delete ops, Vout is the P2PKH output index (the node's spendable UTXO).
+// For delete ops, Vout is the OP_RETURN output index (no P2PKH exists).
+func ParseTxToNodes(outputs []tx.TxOutput, txID []byte) ([]*Node, error) {
+	ops, err := tx.ParseTxNodeOps(outputs)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := make([]*Node, 0, len(ops))
+	for _, op := range ops {
+		pushes := [][]byte{
+			tx.MetaFlagBytes(),
+			op.PNode,
+			op.ParentTxID,
+			op.Payload,
+		}
+
+		vout := op.NodeVout
+		if op.IsDelete {
+			vout = op.Vout // Deletes use OP_RETURN position
+		}
+
+		node, err := ParseNodeFromPushesWithOutpoint(pushes, txID, vout)
+		if err != nil {
+			return nil, fmt.Errorf("parsing node at vout %d: %w", op.Vout, err)
+		}
+		nodes = append(nodes, node)
+	}
+
+	return nodes, nil
+}
+
 // SerializePayload serializes Node fields into the simple TLV binary format
 // that can be used as the payload in OP_RETURN.
 func SerializePayload(node *Node) ([]byte, error) {
