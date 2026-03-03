@@ -32,7 +32,7 @@ type HTLCFundingParams struct {
 	UTXOs        []*HTLCUTXO    // Buyer's unspent outputs
 	ChangeAddr   []byte         // 20-byte change address hash
 	FeeRate      uint64         // Satoshis per byte (0 = use default)
-	InvoiceID    []byte         // Optional 16-byte invoice ID for replay protection
+	InvoiceID    []byte         // 16-byte invoice ID for replay protection (mandatory)
 }
 
 // HTLCFundingResult holds the result of building an HTLC funding transaction.
@@ -135,6 +135,10 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 	}
 	if params.Amount == 0 {
 		return nil, fmt.Errorf("%w: amount must be greater than zero", ErrInvalidParams)
+	}
+	if len(params.InvoiceID) != InvoiceIDLen {
+		return nil, fmt.Errorf("%w: invoiceID is mandatory (%d bytes), got %d",
+			ErrInvalidParams, InvoiceIDLen, len(params.InvoiceID))
 	}
 
 	htlcAmount := params.Amount

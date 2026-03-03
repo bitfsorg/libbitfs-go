@@ -20,7 +20,7 @@ type HTLCParams struct {
 	CapsuleHash  []byte // SHA256(capsule), 32 bytes
 	Amount       uint64 // Payment amount in satoshis
 	Timeout      uint32 // Refund timeout in blocks (default 72 = ~12h), used as nLockTime. Must be in [MinHTLCTimeout, MaxHTLCTimeout].
-	InvoiceID    []byte // Invoice ID for replay protection (16 bytes, mandatory for sCrypt artifact)
+	InvoiceID    []byte // 16-byte invoice ID for replay protection (mandatory)
 }
 
 const (
