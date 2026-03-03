@@ -132,6 +132,7 @@ type ChildEntry struct {
 // serialization model; CLI tools are inherently single-threaded. [Audit fix H-9]
 type Node struct {
 	TxID        []byte // Transaction ID (32 bytes)
+	Vout        uint32 // Output index of this node's P2PKH in its TX (0 for legacy single-op TXs)
 	PNode       []byte // P_node compressed public key (33 bytes)
 	ParentTxID  []byte // Parent's TxID (empty for root)
 	BlockHeight uint32 // Block height (0 = unconfirmed)
@@ -224,4 +225,14 @@ type NodeStore interface {
 
 	// GetChildNodes returns all child nodes referenced in a directory's ChildEntry list.
 	GetChildNodes(dirNode *Node) ([]*Node, error)
+}
+
+// OutpointStore is an optional extension of NodeStore that supports
+// looking up nodes by their full outpoint (TxID + Vout).
+// This is needed for multi-output batch transactions where multiple
+// nodes share the same TxID and are distinguished by their Vout.
+type OutpointStore interface {
+	NodeStore
+	// GetNodeByOutpoint returns a node identified by its outpoint (TxID:Vout).
+	GetNodeByOutpoint(txID []byte, vout uint32) (*Node, error)
 }

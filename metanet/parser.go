@@ -149,6 +149,22 @@ func ParseNodeFromPushesWithTxID(pushes [][]byte, txID []byte) (*Node, error) {
 	return node, nil
 }
 
+// ParseNodeFromPushesWithOutpoint is like ParseNode but also sets TxID and Vout.
+// Use this when parsing nodes from multi-output batch transactions where each
+// node's P2PKH lives at a specific output index.
+func ParseNodeFromPushesWithOutpoint(pushes [][]byte, txID []byte, vout uint32) (*Node, error) {
+	node, err := ParseNode(pushes)
+	if err != nil {
+		return nil, err
+	}
+	if len(txID) == TxIDLen {
+		node.TxID = make([]byte, TxIDLen)
+		copy(node.TxID, txID)
+	}
+	node.Vout = vout
+	return node, nil
+}
+
 // SerializePayload serializes Node fields into the simple TLV binary format
 // that can be used as the payload in OP_RETURN.
 func SerializePayload(node *Node) ([]byte, error) {
