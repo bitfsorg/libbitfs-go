@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,19 +15,23 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// ParseHTLCPreimage — Op0 variant (alias for OP_FALSE, sCrypt claim index 0)
+// ParseHTLCPreimage — Op1 variant (alias for OP_TRUE, claim branch selector)
 // ---------------------------------------------------------------------------
 
-func TestParseHTLCPreimage_Op0Variant(t *testing.T) {
+func TestParseHTLCPreimage_Op1Variant(t *testing.T) {
 	tx := transaction.NewTransaction()
-	dummyTxID := chainhash.DoubleHashH([]byte("op0-variant"))
+	dummyTxID := chainhash.DoubleHashH([]byte("op1-variant"))
 
-	// sCrypt claim format: <capsule> <sig> <pubkey> OP_0
+	// Claim format: <sig> <pubkey> <fileTxID||capsule> OP_1 (alias for OP_TRUE)
 	s := &script.Script{}
-	_ = s.AppendPushData([]byte("capsule-preimage-op0"))
 	_ = s.AppendPushData([]byte("sig"))
 	_ = s.AppendPushData([]byte("pubkey"))
-	_ = s.AppendOpcodes(script.Op0) // Op0 = OP_FALSE = claim method selector
+	// Build 64-byte preimage: fileTxID (32) || capsule (32)
+	mockFileTxID := bytes.Repeat([]byte{0xf1}, 32)
+	mockCapsule := bytes.Repeat([]byte{0xca}, 32)
+	fullPreimage := append(mockFileTxID, mockCapsule...)
+	_ = s.AppendPushData(fullPreimage)
+	_ = s.AppendOpcodes(script.Op1) // Op1 = OP_TRUE = claim branch selector
 
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,
@@ -39,24 +44,24 @@ func TestParseHTLCPreimage_Op0Variant(t *testing.T) {
 
 	preimage, err := ParseHTLCPreimage(raw, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("capsule-preimage-op0"), preimage)
+	assert.Equal(t, mockCapsule, preimage)
 }
 
 // ---------------------------------------------------------------------------
-// ParseHTLCPreimage — non-OP_FALSE last chunk (OP_TRUE = refund) is skipped
+// ParseHTLCPreimage — non-OP_TRUE last chunk (OP_FALSE = refund) is skipped
 // ---------------------------------------------------------------------------
 
-func TestParseHTLCPreimage_NonOpFalseLastChunk(t *testing.T) {
+func TestParseHTLCPreimage_NonOpTrueLastChunk(t *testing.T) {
 	tx := transaction.NewTransaction()
-	dummyTxID := chainhash.DoubleHashH([]byte("not-false"))
+	dummyTxID := chainhash.DoubleHashH([]byte("not-true"))
 
-	// sCrypt refund format ends with OP_TRUE (method index 1), not OP_FALSE.
-	// ParseHTLCPreimage only looks for OP_FALSE (claim, index 0).
+	// Refund format ends with OP_FALSE (ELSE branch), not OP_TRUE.
+	// ParseHTLCPreimage only looks for OP_TRUE (claim, IF branch).
 	s := &script.Script{}
 	_ = s.AppendPushData([]byte("sig"))
 	_ = s.AppendPushData([]byte("pubkey"))
 	_ = s.AppendPushData([]byte("preimage"))
-	_ = s.AppendOpcodes(script.OpTRUE) // OP_TRUE -> refund path, not claim
+	_ = s.AppendOpcodes(script.OpFALSE) // OP_FALSE -> refund path, not claim
 
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,
@@ -123,10 +128,10 @@ func TestVerifyPayment_ZeroPriceInvoice(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// BuildHTLC — 2-of-2 multisig refund path
+// BuildHTLC — deterministic script generation
 // ---------------------------------------------------------------------------
 
-func TestBuildHTLC_ArtifactScriptDeterministic(t *testing.T) {
+func TestBuildHTLC_ScriptDeterministic(t *testing.T) {
 	params := validHTLCParams()
 
 	scriptBytes1, err := BuildHTLC(params)

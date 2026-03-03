@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func TestBuildHTLC_ScriptContainsEmbeddedData(t *testing.T) {
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
-	// Verify the sCrypt artifact script contains the embedded parameters
+	// Verify the HTLC script contains the embedded parameters
 	// at known byte offsets.
 	capsuleHash, err := ExtractCapsuleHashFromHTLC(scriptBytes)
 	require.NoError(t, err)
@@ -110,12 +111,12 @@ func TestParseHTLCPreimage_NilUnlockingScript(t *testing.T) {
 func TestParseHTLCPreimage_EmptyPreimageData(t *testing.T) {
 	tx := transaction.NewTransaction()
 	dummyTxID := chainhash.DoubleHashH([]byte("empty-preimage"))
-	// sCrypt claim format: <capsule> <sig> <pubkey> OP_0
+	// Claim format: <sig> <pubkey> <capsule> OP_TRUE
 	s := &script.Script{}
-	s.AppendPushData([]byte{}) // empty preimage (first element)
 	s.AppendPushData([]byte("sig"))
 	s.AppendPushData([]byte("pubkey"))
-	s.AppendOpcodes(script.OpFALSE) // OP_0 = claim method selector
+	s.AppendPushData([]byte{}) // empty preimage (third element)
+	s.AppendOpcodes(script.OpTRUE) // OP_TRUE = claim branch selector
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID,
 		SourceTxOutIndex: 0,
@@ -139,14 +140,18 @@ func TestParseHTLCPreimage_MultipleInputsSecondMatches(t *testing.T) {
 		UnlockingScript:  s1,
 	})
 
-	// Second input: valid sCrypt claim spend pattern.
-	// Format: <capsule> <sig> <pubkey> OP_0
+	// Second input: valid claim spend pattern.
+	// Format: <sig> <pubkey> <fileTxID||capsule> OP_TRUE
 	dummyTxID2 := chainhash.DoubleHashH([]byte("input2"))
 	s2 := &script.Script{}
-	s2.AppendPushData([]byte("capsule-preimage"))
 	s2.AppendPushData([]byte("signature"))
 	s2.AppendPushData([]byte("pubkey"))
-	s2.AppendOpcodes(script.OpFALSE) // OP_0 = claim method selector
+	// Build 64-byte preimage: fileTxID (32) || capsule (32)
+	mockFileTxID := bytes.Repeat([]byte{0xf0}, 32)
+	mockCapsule := bytes.Repeat([]byte{0xca}, 32)
+	fullPreimage := append(mockFileTxID, mockCapsule...)
+	s2.AppendPushData(fullPreimage)
+	s2.AppendOpcodes(script.OpTRUE) // OP_TRUE = claim branch selector
 	tx.AddInput(&transaction.TransactionInput{
 		SourceTXID:       &dummyTxID2,
 		SourceTxOutIndex: 0,
@@ -156,7 +161,7 @@ func TestParseHTLCPreimage_MultipleInputsSecondMatches(t *testing.T) {
 	raw := tx.Bytes()
 	preimage, err := ParseHTLCPreimage(raw, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("capsule-preimage"), preimage)
+	assert.Equal(t, mockCapsule, preimage)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"math"
 	"net/http"
@@ -305,7 +306,7 @@ func TestBuildHTLC_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, scriptBytes)
 
-	// Verify the script is large enough to be a valid sCrypt artifact.
+	// Verify the script is large enough to be a valid HTLC.
 	assert.Greater(t, len(scriptBytes), 100)
 
 	// Verify that the embedded parameters can be extracted.
@@ -332,7 +333,7 @@ func TestBuildHTLC_InvalidBuyerPubKey(t *testing.T) {
 
 func TestBuildHTLC_MissingInvoiceID(t *testing.T) {
 	params := validHTLCParams()
-	params.InvoiceID = nil // mandatory in sCrypt artifact
+	params.InvoiceID = nil // mandatory
 	_, err := BuildHTLC(params)
 	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
 }
@@ -359,10 +360,14 @@ func TestBuildHTLC_ZeroAmount(t *testing.T) {
 }
 
 func TestBuildHTLC_ZeroTimeout(t *testing.T) {
+	// Timeout is no longer embedded in the script (removed OP_CLTV for BSV
+	// compatibility). BuildHTLC does not validate timeout — it's only used
+	// at the transaction level (nLockTime) in BuildBuyerRefundTx.
 	params := validHTLCParams()
 	params.Timeout = 0
-	_, err := BuildHTLC(params)
-	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
+	script, err := BuildHTLC(params)
+	require.NoError(t, err)
+	assert.NotEmpty(t, script)
 }
 
 func TestBuildHTLC_ContainsBuyerPkh(t *testing.T) {
@@ -370,13 +375,11 @@ func TestBuildHTLC_ContainsBuyerPkh(t *testing.T) {
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
-	// The sCrypt artifact embeds buyerPkh = HASH160(BuyerPubKey) at a known offset.
-	buyerPkh := scriptBytes[htlcBuyerPkhOffset_ : htlcBuyerPkhOffset_+PubKeyHashLen]
-	assert.NotEqual(t, make([]byte, PubKeyHashLen), buyerPkh, "buyerPkh should not be all zeros")
-
-	// Verify the embedded buyerPkh matches HASH160(BuyerPubKey).
+	// The buyer PKH (HASH160(BuyerPubKey)) is in the variable-offset section
+	// after the timeout push. Verify it appears in the script by searching for it.
 	expectedPkh := hash160ForTest(params.BuyerPubKey)
-	assert.Equal(t, expectedPkh, buyerPkh)
+	assert.True(t, bytes.Contains(scriptBytes, expectedPkh),
+		"script should contain buyer PKH = HASH160(BuyerPubKey)")
 }
 
 // --- ParseHTLCPreimage Tests ---
@@ -395,16 +398,11 @@ func TestParseHTLCPreimage_InvalidTx(t *testing.T) {
 }
 
 func TestParseHTLCPreimage_ValidTx(t *testing.T) {
-	// Build a transaction with a sCrypt claim unlocking script.
+	// Build a transaction with a claim unlocking script.
 	tx := transaction.NewTransaction()
 
-	// Create an unlocking script: <capsule> <sig> <pubkey> OP_0
+	// Create an unlocking script: <sig> <pubkey> <fileTxID||capsule> OP_TRUE
 	unlockScript := &script.Script{}
-	// Preimage (32 bytes capsule) -- first element in sCrypt claim format.
-	preimage := make([]byte, 32)
-	preimage[0] = 0xca
-	preimage[1] = 0xfe
-	_ = unlockScript.AppendPushData(preimage)
 	// Dummy signature (71 bytes typical)
 	dummySig := make([]byte, 71)
 	dummySig[0] = 0x30
@@ -413,8 +411,16 @@ func TestParseHTLCPreimage_ValidTx(t *testing.T) {
 	dummyPub := make([]byte, 33)
 	dummyPub[0] = 0x02
 	_ = unlockScript.AppendPushData(dummyPub)
-	// OP_0 (OP_FALSE) to select claim method (index 0)
-	_ = unlockScript.AppendOpcodes(script.OpFALSE)
+	// Preimage (64 bytes: fileTxID 32 + capsule 32) -- third element in claim format.
+	dummyFileTxID := make([]byte, 32)
+	dummyFileTxID[0] = 0xf0
+	capsuleData := make([]byte, 32)
+	capsuleData[0] = 0xca
+	capsuleData[1] = 0xfe
+	fullPreimage := append(dummyFileTxID, capsuleData...)
+	_ = unlockScript.AppendPushData(fullPreimage)
+	// OP_TRUE to select claim path (IF branch)
+	_ = unlockScript.AppendOpcodes(script.OpTRUE)
 
 	dummyTxID := chainhash.DoubleHashH([]byte("dummy-txid"))
 	input := &transaction.TransactionInput{
@@ -432,7 +438,7 @@ func TestParseHTLCPreimage_ValidTx(t *testing.T) {
 
 	extracted, err := ParseHTLCPreimage(rawTx, nil)
 	require.NoError(t, err)
-	assert.Equal(t, preimage, extracted)
+	assert.Equal(t, capsuleData, extracted)
 }
 
 // --- VerifyPayment Tests ---
@@ -682,7 +688,7 @@ func TestBuildHTLC_ContainsSellerPkh(t *testing.T) {
 	scriptBytes, err := BuildHTLC(params)
 	require.NoError(t, err)
 
-	// The sCrypt artifact embeds sellerPkh (= SellerAddr) at a known offset.
+	// The plain Bitcoin Script HTLC embeds sellerPkh (= SellerAddr) at a known offset.
 	sellerPkh := scriptBytes[htlcSellerPkhOffset_ : htlcSellerPkhOffset_+PubKeyHashLen]
 	assert.Equal(t, params.SellerAddr, sellerPkh, "sellerPkh should match SellerAddr")
 }

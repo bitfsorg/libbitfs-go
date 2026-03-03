@@ -59,8 +59,7 @@ type SellerClaimParams struct {
 
 // BuyerRefundParams holds parameters for building an on-chain refund transaction.
 // The buyer can refund unilaterally after the timeout -- no seller cooperation needed.
-// The sCrypt contract's refund() method uses this.timeLock() which verifies
-// nLockTime via OP_PUSH_TX (BIP143 sighash preimage).
+// The timeout is enforced at the transaction level via nLockTime (not in the script).
 type BuyerRefundParams struct {
 	FundingTxID   []byte         // 32-byte HTLC funding tx hash
 	FundingVout   uint32         // HTLC output index
@@ -276,11 +275,13 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 }
 
 // BuildSellerClaimTx creates a signed transaction spending the HTLC via the
-// sCrypt claim() method. The unlocking script format matches the ABI:
+// claim path (OP_IF branch). The unlocking script format is:
 //
-//	<capsule_preimage> <sig> <pubkey> OP_0
+//	<sig> <pubkey> <fileTxID||capsule> OP_TRUE
 //
-// Where OP_0 is the method selector (claim has index 0).
+// Where OP_TRUE selects the IF branch (claim). The preimage is 64 bytes:
+// fileTxID (32) concatenated with capsule (32). The locking script verifies
+// OP_SHA256(preimage) == capsuleHash, where capsuleHash = SHA256(fileTxID||capsule).
 func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, error) {
 	if params == nil {
 		return nil, fmt.Errorf("%w: nil params", ErrInvalidParams)
@@ -296,6 +297,9 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	}
 	if len(params.Capsule) == 0 {
 		return nil, fmt.Errorf("%w: empty capsule", ErrInvalidParams)
+	}
+	if len(params.FileTxID) != 32 {
+		return nil, fmt.Errorf("%w: fileTxID must be 32 bytes, got %d", ErrInvalidParams, len(params.FileTxID))
 	}
 	if len(params.OutputAddr) != PubKeyHashLen {
 		return nil, fmt.Errorf("%w: output address must be %d bytes", ErrInvalidParams, PubKeyHashLen)
@@ -319,8 +323,9 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 		feeRate = defaultHTLCFeeRate
 	}
 
-	// Estimate claim tx size: ~10 overhead + ~(73+33+32+1) unlocking + script + ~40 output.
-	estSize := 10 + 73 + 33 + 32 + 1 + uint64(len(params.HTLCScript)) + 40
+	// Estimate claim tx size: ~10 overhead + ~(73+33+64+1) unlocking + script + ~40 output.
+	// The preimage is 64 bytes (fileTxID 32 + capsule 32).
+	estSize := 10 + 73 + 33 + 64 + 1 + uint64(len(params.HTLCScript)) + 40
 	estFee := estSize * feeRate
 
 	if params.FundingAmount <= estFee {
@@ -371,23 +376,31 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 
-	// Build unlocking script for sCrypt claim() method (index 0):
-	//   <capsule_preimage> <sig> <pubkey> OP_0
+	// Build unlocking script for claim path (OP_IF branch):
+	//   <sig> <pubkey> <fileTxID||capsule> OP_TRUE
+	// The preimage is fileTxID (32 bytes) concatenated with capsule (32 bytes).
+	// The locking script does OP_SHA256 on this 64-byte preimage and verifies
+	// against the embedded capsuleHash = SHA256(fileTxID || capsule).
 	sigBytes := appendSighashFlag(sig.Serialize())
 	sellerPubKey := params.SellerPrivKey.PubKey().Compressed()
 
+	// Build 64-byte preimage: fileTxID || capsule
+	preimage := make([]byte, 0, 64)
+	preimage = append(preimage, params.FileTxID...)
+	preimage = append(preimage, params.Capsule...)
+
 	unlockScript := &script.Script{}
-	if err := unlockScript.AppendPushData(params.Capsule); err != nil {
-		return nil, fmt.Errorf("push capsule: %w", err)
-	}
 	if err := unlockScript.AppendPushData(sigBytes); err != nil {
 		return nil, fmt.Errorf("push sig: %w", err)
 	}
 	if err := unlockScript.AppendPushData(sellerPubKey); err != nil {
 		return nil, fmt.Errorf("push seller pubkey: %w", err)
 	}
-	if err := unlockScript.AppendOpcodes(script.OpFALSE); err != nil {
-		return nil, fmt.Errorf("push method selector OP_0: %w", err)
+	if err := unlockScript.AppendPushData(preimage); err != nil {
+		return nil, fmt.Errorf("push preimage: %w", err)
+	}
+	if err := unlockScript.AppendOpcodes(script.OpTRUE); err != nil {
+		return nil, fmt.Errorf("push branch selector OP_TRUE: %w", err)
 	}
 
 	tx.Inputs[0].UnlockingScript = unlockScript
@@ -396,17 +409,18 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 }
 
 // BuildBuyerRefundTx creates a signed refund transaction spending the HTLC via
-// the sCrypt refund() method. The buyer can refund unilaterally after the
+// the refund path (OP_ELSE branch). The buyer can refund unilaterally after the
 // timeout -- no seller cooperation is needed.
 //
 // The transaction sets nLockTime = params.Timeout and sequence = 0xfffffffe to
-// enable nLockTime enforcement. The unlocking script format matches the sCrypt
-// refund() ABI (index 1):
+// enable nLockTime enforcement. The unlocking script format is:
 //
-//	<sig> <pubkey> <sighash_preimage> OP_1
+//	<sig> <pubkey> OP_FALSE
 //
-// Where OP_1 selects the refund method (index 1), and the sighash preimage is
-// the BIP143 preimage that the contract verifies via OP_PUSH_TX.
+// Where OP_FALSE selects the ELSE branch (refund). The timeout is enforced at
+// the transaction level via nLockTime (consensus-enforced by miners). BSV
+// post-Genesis treats OP_CLTV as OP_NOP2 which is rejected by mempool policy,
+// so the timelock is not embedded in the script.
 func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, error) {
 	if params == nil {
 		return nil, fmt.Errorf("%w: nil params", ErrInvalidParams)
@@ -445,10 +459,9 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 		feeRate = defaultHTLCFeeRate
 	}
 
-	// Estimate refund tx size: ~10 overhead + ~(73 + 33 + preimage ~200 + 1)
-	// unlocking + script + ~40 output. The BIP143 sighash preimage is typically
-	// ~180 bytes; we use 200 as conservative estimate.
-	estSize := 10 + 73 + 33 + 200 + 1 + uint64(len(params.HTLCScript)) + 40
+	// Estimate refund tx size: ~10 overhead + ~(73 + 33 + 1) unlocking
+	// + script + ~40 output. No sighash preimage needed.
+	estSize := 10 + 73 + 33 + 1 + uint64(len(params.HTLCScript)) + 40
 	estFee := estSize * feeRate
 
 	if params.FundingAmount <= estFee {
@@ -490,12 +503,6 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 		Satoshis:      outputAmount,
 	})
 
-	// Compute BIP143 sighash preimage (used by sCrypt's OP_PUSH_TX).
-	preimage, err := tx.CalcInputPreimage(0, sighash.AllForkID)
-	if err != nil {
-		return nil, fmt.Errorf("calc input preimage: %w", err)
-	}
-
 	// Compute sighash and sign with buyer's key.
 	sigHash, err := tx.CalcInputSignatureHash(0, sighash.AllForkID)
 	if err != nil {
@@ -510,8 +517,8 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 	buyerSigBytes := appendSighashFlag(sig.Serialize())
 	buyerPubKey := params.BuyerPrivKey.PubKey().Compressed()
 
-	// Build unlocking script for sCrypt refund() method (index 1):
-	//   <sig> <pubkey> <sighash_preimage> OP_1
+	// Build unlocking script for refund path (OP_ELSE branch):
+	//   <sig> <pubkey> OP_FALSE
 	unlockScript := &script.Script{}
 	if err := unlockScript.AppendPushData(buyerSigBytes); err != nil {
 		return nil, fmt.Errorf("push sig: %w", err)
@@ -519,11 +526,8 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 	if err := unlockScript.AppendPushData(buyerPubKey); err != nil {
 		return nil, fmt.Errorf("push buyer pubkey: %w", err)
 	}
-	if err := unlockScript.AppendPushData(preimage); err != nil {
-		return nil, fmt.Errorf("push preimage: %w", err)
-	}
-	if err := unlockScript.AppendOpcodes(script.OpTRUE); err != nil {
-		return nil, fmt.Errorf("push method selector OP_1: %w", err)
+	if err := unlockScript.AppendOpcodes(script.OpFALSE); err != nil {
+		return nil, fmt.Errorf("push branch selector OP_FALSE: %w", err)
 	}
 
 	tx.Inputs[0].UnlockingScript = unlockScript

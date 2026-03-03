@@ -2,20 +2,18 @@ package payment
 
 import (
 	"bytes"
-	"encoding/hex"
+	"crypto/sha256"
 	"fmt"
-	"strings"
 
 	bsvhash "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/bitfsorg/libbitfs-go/method42"
 )
 
 // HTLCParams holds parameters for creating an HTLC transaction.
 type HTLCParams struct {
 	BuyerPubKey  []byte // Buyer's compressed public key (33 bytes)
-	SellerPubKey []byte // Seller's compressed public key (33 bytes) — kept for BuildHTLCFundingTx compatibility; not embedded in sCrypt artifact script
+	SellerPubKey []byte // Seller's compressed public key (33 bytes) — kept for BuildHTLCFundingTx compatibility; not embedded in the HTLC script
 	SellerAddr   []byte // Seller's P2PKH address hash (20 bytes)
 	CapsuleHash  []byte // SHA256(capsule), 32 bytes
 	Amount       uint64 // Payment amount in satoshis
@@ -54,19 +52,32 @@ const (
 	InvoiceIDLen = 16
 )
 
-// BuildHTLC constructs an HTLC locking script by instantiating the compiled
-// sCrypt BitfsHTLC artifact. The artifact encodes both the seller-claim path
-// (hash-lock + P2PKH) and the buyer-refund path (OP_PUSH_TX + nLockTime CLTV)
-// in a single script. Constructor parameters embedded in the script:
+// BuildHTLC constructs a plain Bitcoin Script HTLC locking script. The script
+// encodes both the seller-claim path (hash-lock + P2PKH) and the buyer-refund
+// path (P2PKH) in a single script:
+//
+//	<invoiceId>  OP_DROP
+//	OP_IF
+//	  OP_SHA256  <capsuleHash>  OP_EQUALVERIFY
+//	  OP_DUP  OP_HASH160  <sellerPkh>  OP_EQUALVERIFY  OP_CHECKSIG
+//	OP_ELSE
+//	  OP_DUP  OP_HASH160  <buyerPkh>  OP_EQUALVERIFY  OP_CHECKSIG
+//	OP_ENDIF
+//
+// Constructor parameters embedded in the script:
 //
 //   - invoiceId   — 16-byte replay protection token (mandatory)
 //   - capsuleHash — SHA256(capsule), 32 bytes
 //   - sellerPkh   — HASH160(seller public key), 20 bytes
 //   - buyerPkh    — HASH160(buyer public key), 20 bytes
-//   - timeout     — refund timeout in blocks
 //
-// The seller claims by providing the capsule preimage and their signature.
-// The buyer refunds on-chain after timeout using OP_PUSH_TX to verify nLockTime.
+// The timeout is NOT embedded in the script. BSV post-Genesis treats OP_CLTV
+// (0xb1) as OP_NOP2, which is rejected by standard mempool policy. Instead,
+// the timeout is enforced at the transaction level via nLockTime on the refund
+// transaction (consensus-enforced by miners).
+//
+// The seller claims by providing the capsule preimage, their signature, and OP_TRUE.
+// The buyer refunds using OP_FALSE; the refund tx sets nLockTime = timeout.
 func BuildHTLC(params *HTLCParams) ([]byte, error) {
 	if params == nil {
 		return nil, fmt.Errorf("%w: nil params", ErrHTLCBuildFailed)
@@ -90,42 +101,84 @@ func BuildHTLC(params *HTLCParams) ([]byte, error) {
 	if params.Amount == 0 {
 		return nil, fmt.Errorf("%w: amount must be > 0", ErrHTLCBuildFailed)
 	}
-	if params.Timeout == 0 {
-		return nil, fmt.Errorf("%w: timeout must be > 0", ErrHTLCBuildFailed)
-	}
-	if params.Timeout < MinHTLCTimeout {
-		return nil, fmt.Errorf("%w: timeout %d below minimum %d blocks",
-			ErrHTLCBuildFailed, params.Timeout, MinHTLCTimeout)
-	}
-	if params.Timeout > MaxHTLCTimeout {
-		return nil, fmt.Errorf("%w: timeout %d exceeds maximum %d blocks",
-			ErrHTLCBuildFailed, params.Timeout, MaxHTLCTimeout)
-	}
 
 	// Derive buyer PKH from buyer public key.
 	buyerPkh := bsvhash.Hash160(params.BuyerPubKey)
 
-	art, err := LoadArtifact()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
+	s := &script.Script{}
+	if err := s.AppendPushData(params.InvoiceID); err != nil {
+		return nil, fmt.Errorf("%w: push invoiceId: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpDROP); err != nil {
+		return nil, fmt.Errorf("%w: OP_DROP: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpIF); err != nil {
+		return nil, fmt.Errorf("%w: OP_IF: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpSHA256); err != nil {
+		return nil, fmt.Errorf("%w: OP_SHA256: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendPushData(params.CapsuleHash); err != nil {
+		return nil, fmt.Errorf("%w: push capsuleHash: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
+		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpDUP); err != nil {
+		return nil, fmt.Errorf("%w: OP_DUP: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpHASH160); err != nil {
+		return nil, fmt.Errorf("%w: OP_HASH160: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendPushData(params.SellerAddr); err != nil {
+		return nil, fmt.Errorf("%w: push sellerPkh: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
+		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpCHECKSIG); err != nil {
+		return nil, fmt.Errorf("%w: OP_CHECKSIG: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpELSE); err != nil {
+		return nil, fmt.Errorf("%w: OP_ELSE: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpDUP); err != nil {
+		return nil, fmt.Errorf("%w: OP_DUP: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpHASH160); err != nil {
+		return nil, fmt.Errorf("%w: OP_HASH160: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendPushData(buyerPkh); err != nil {
+		return nil, fmt.Errorf("%w: push buyerPkh: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpEQUALVERIFY); err != nil {
+		return nil, fmt.Errorf("%w: OP_EQUALVERIFY: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpCHECKSIG); err != nil {
+		return nil, fmt.Errorf("%w: OP_CHECKSIG: %v", ErrHTLCBuildFailed, err)
+	}
+	if err := s.AppendOpcodes(script.OpENDIF); err != nil {
+		return nil, fmt.Errorf("%w: OP_ENDIF: %v", ErrHTLCBuildFailed, err)
 	}
 
-	scriptBytes, err := art.Instantiate(params.InvoiceID, params.CapsuleHash, params.SellerAddr, buyerPkh, params.Timeout)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHTLCBuildFailed, err)
-	}
-
-	return scriptBytes, nil
+	return s.Bytes(), nil
 }
 
-// ParseHTLCPreimage extracts the capsule (preimage) from a spent HTLC input.
-// The spending transaction's unlocking script for the sCrypt claim() path is:
+// ParseHTLCPreimage extracts the capsule from a spent HTLC claim input.
+// The spending transaction's unlocking script for the claim path is:
 //
-//	<capsule_preimage> <sig> <pubkey> OP_0
+//	<sig> <pubkey> <fileTxID||capsule> OP_TRUE
 //
-// Where OP_0 is the method selector (claim has index 0).
-// If expectedCapsuleHash is non-nil, verifies SHA256(fileTxID || preimage) matches before returning.
-// fileTxID binds the capsule hash to the file's transaction identity.
+// Where OP_TRUE selects the IF branch (claim). The preimage pushed in the
+// unlocking script is fileTxID (32 bytes) concatenated with the capsule (32
+// bytes), totalling 64 bytes. The locking script verifies OP_SHA256 of this
+// 64-byte preimage against the embedded capsuleHash = SHA256(fileTxID||capsule).
+//
+// If expectedCapsuleHash is non-nil, verifies SHA256(preimage) matches.
+// If fileTxID is provided, additionally verifies the first 32 bytes of the
+// preimage match the expected file transaction ID.
+//
+// Returns only the capsule (last 32 bytes of the preimage).
 func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID ...[]byte) ([]byte, error) {
 	if len(spendingTx) == 0 {
 		return nil, fmt.Errorf("%w: empty spending transaction", ErrInvalidPreimage)
@@ -147,65 +200,83 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 			continue
 		}
 
-		// sCrypt claim unlocking script: <capsule> <sig> <pubkey> OP_0
-		// We expect exactly 4 chunks.
+		// Claim unlocking script: <sig> <pubkey> <fileTxID||capsule> OP_TRUE
+		// We expect at least 4 chunks.
 		if len(chunks) < 4 {
 			continue
 		}
 
-		// The last chunk should be OP_0/OP_FALSE (0x00) selecting claim method (index 0).
+		// The last chunk should be OP_TRUE/OP_1 (0x51) selecting claim path (IF branch).
 		lastChunk := chunks[len(chunks)-1]
-		if lastChunk.Op != script.OpFALSE && lastChunk.Op != script.Op0 {
+		if lastChunk.Op != script.OpTRUE && lastChunk.Op != script.Op1 {
 			continue
 		}
 
-		// The capsule preimage is the first element (chunks[0]).
-		preimageChunk := chunks[0]
-		if len(preimageChunk.Data) == 0 {
+		// The preimage (fileTxID || capsule) is the third element (chunks[2]).
+		// It must be exactly 64 bytes: 32-byte fileTxID + 32-byte capsule.
+		preimageChunk := chunks[2]
+		if len(preimageChunk.Data) < 64 {
 			continue
+		}
+
+		preimageFileTxID := preimageChunk.Data[:32]
+		capsule := preimageChunk.Data[32:64]
+
+		// Optionally verify fileTxID matches.
+		if len(fileTxID) > 0 && len(fileTxID[0]) > 0 {
+			if !bytes.Equal(preimageFileTxID, fileTxID[0]) {
+				continue
+			}
 		}
 
 		// Verify hash if expected hash provided.
+		// SHA256(fileTxID || capsule) must match the embedded capsuleHash.
 		if expectedCapsuleHash != nil {
-			var ftxid []byte
-			if len(fileTxID) > 0 {
-				ftxid = fileTxID[0]
-			}
-			h, hErr := method42.ComputeCapsuleHash(ftxid, preimageChunk.Data)
-			if hErr != nil || !bytes.Equal(h, expectedCapsuleHash) {
-				continue // Hash mismatch or invalid input — try next input.
+			h := sha256.Sum256(preimageChunk.Data[:64])
+			if !bytes.Equal(h[:], expectedCapsuleHash) {
+				continue
 			}
 		}
 
-		return preimageChunk.Data, nil
+		return capsule, nil
 	}
 
 	return nil, fmt.Errorf("%w: no HTLC preimage found in transaction inputs", ErrInvalidPreimage)
 }
 
-// Byte offsets of constructor parameters within the instantiated sCrypt artifact
-// script. These offsets are determined by the fixed-size prefix in the compiled
-// hex template (107 bytes before the first parameter). All four data fields
-// (invoiceId, capsuleHash, sellerPkh, buyerPkh) precede the variable-length
-// timeout encoding, so their offsets are constant.
+// Byte offsets of parameters within the plain Bitcoin Script HTLC locking
+// script. All offsets are fixed (no variable-length fields):
+//
+//	byte[0]      = 0x10 (PUSH 16 bytes)
+//	byte[1..16]  = invoiceId (16 bytes)
+//	byte[17]     = 0x75 (OP_DROP)
+//	byte[18]     = 0x63 (OP_IF)
+//	byte[19]     = 0xa8 (OP_SHA256)
+//	byte[20]     = 0x20 (PUSH 32 bytes)
+//	byte[21..52] = capsuleHash (32 bytes)
+//	byte[53]     = 0x88 (OP_EQUALVERIFY)
+//	byte[54..78] = OP_DUP OP_HASH160 0x14 sellerPkh(20) OP_EQUALVERIFY OP_CHECKSIG
+//	byte[79]     = 0x67 (OP_ELSE)
+//	byte[80..104]= OP_DUP OP_HASH160 0x14 buyerPkh(20) OP_EQUALVERIFY OP_CHECKSIG
+//	byte[105]    = 0x68 (OP_ENDIF)
 const (
-	htlcInvoiceIDOffset_   = 107 // byte offset of invoiceId (16 bytes)
-	htlcCapsuleHashOffset_ = 123 // byte offset of capsuleHash (32 bytes)
-	htlcSellerPkhOffset_   = 155 // byte offset of sellerPkh (20 bytes)
-	htlcBuyerPkhOffset_    = 175 // byte offset of buyerPkh (20 bytes)
+	htlcInvoiceIDOffset_   = 1  // byte offset of invoiceId (16 bytes)
+	htlcCapsuleHashOffset_ = 21 // byte offset of capsuleHash (32 bytes)
+	htlcSellerPkhOffset_   = 57 // byte offset of sellerPkh (20 bytes)
+	htlcBuyerPkhOffset_    = 83 // byte offset of buyerPkh (20 bytes)
 
-	// Minimum script length: all fixed fields + at least 1-byte timeout + suffix.
-	htlcMinScriptLen = htlcBuyerPkhOffset_ + PubKeyHashLen + 1
+	// Exact script length: 106 bytes (fixed, no variable-length timeout).
+	htlcMinScriptLen = 106
 )
 
 // ExtractCapsuleHashFromHTLC extracts the 32-byte capsule hash embedded in an
-// HTLC locking script produced by the sCrypt BitfsHTLC artifact.
+// HTLC locking script produced by BuildHTLC.
 func ExtractCapsuleHashFromHTLC(htlcScript []byte) ([]byte, error) {
 	if len(htlcScript) < htlcMinScriptLen {
 		return nil, fmt.Errorf("HTLC script too short: %d bytes", len(htlcScript))
 	}
-	if !isArtifactScript(htlcScript) {
-		return nil, fmt.Errorf("HTLC script does not match sCrypt artifact prefix")
+	if !isHTLCScript(htlcScript) {
+		return nil, fmt.Errorf("HTLC script does not match expected format")
 	}
 	hash := make([]byte, CapsuleHashLen)
 	copy(hash, htlcScript[htlcCapsuleHashOffset_:htlcCapsuleHashOffset_+CapsuleHashLen])
@@ -213,48 +284,29 @@ func ExtractCapsuleHashFromHTLC(htlcScript []byte) ([]byte, error) {
 }
 
 // ExtractInvoiceIDFromHTLC extracts the 16-byte invoice ID embedded in an
-// HTLC locking script produced by the sCrypt BitfsHTLC artifact.
-// Returns nil if the script does not match the expected artifact format.
+// HTLC locking script produced by BuildHTLC.
+// Returns nil if the script does not match the expected HTLC format.
 func ExtractInvoiceIDFromHTLC(htlcScript []byte) ([]byte, error) {
 	if len(htlcScript) < htlcMinScriptLen {
-		return nil, nil // Too short; cannot be an artifact script.
+		return nil, nil // Too short; cannot be an HTLC script.
 	}
-	if !isArtifactScript(htlcScript) {
-		return nil, nil // Not an artifact script.
+	if !isHTLCScript(htlcScript) {
+		return nil, nil // Not an HTLC script.
 	}
 	id := make([]byte, InvoiceIDLen)
 	copy(id, htlcScript[htlcInvoiceIDOffset_:htlcInvoiceIDOffset_+InvoiceIDLen])
 	return id, nil
 }
 
-// artifactPrefixHex is the first portion of the compiled sCrypt hex template
-// that appears before the constructor parameters. Used to identify whether a
-// script was produced by the BitfsHTLC artifact.
-var artifactPrefix []byte
-
-func init() {
-	// Load the artifact prefix from the hex template at init time.
-	art, err := LoadArtifact()
-	if err != nil {
-		// Artifact is embedded via go:embed; if it's missing the binary is broken.
-		panic(fmt.Sprintf("payment: load artifact for prefix: %v", err))
-	}
-	// The prefix is the hex template up to the first placeholder.
-	idx := strings.Index(art.Hex, "<")
-	if idx <= 0 {
-		panic("payment: artifact hex has no placeholders")
-	}
-	artifactPrefix, err = hex.DecodeString(art.Hex[:idx])
-	if err != nil {
-		panic(fmt.Sprintf("payment: decode artifact prefix: %v", err))
-	}
-}
-
-// isArtifactScript returns true if the script bytes start with the known
-// sCrypt BitfsHTLC artifact prefix.
-func isArtifactScript(scriptBytes []byte) bool {
-	if len(scriptBytes) < len(artifactPrefix) {
+// isHTLCScript returns true if the script bytes match the expected plain
+// Bitcoin Script HTLC format by checking structural marker bytes.
+func isHTLCScript(scriptBytes []byte) bool {
+	if len(scriptBytes) < htlcMinScriptLen {
 		return false
 	}
-	return bytes.Equal(scriptBytes[:len(artifactPrefix)], artifactPrefix)
+	return scriptBytes[0] == 0x10 && // PUSH 16 bytes (invoiceId)
+		scriptBytes[17] == 0x75 && // OP_DROP
+		scriptBytes[18] == 0x63 && // OP_IF
+		scriptBytes[19] == 0xa8 && // OP_SHA256
+		scriptBytes[20] == 0x20 // PUSH 32 bytes (capsuleHash)
 }

@@ -343,23 +343,26 @@ func TestBuildSellerClaimTx(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, capsule, extracted)
 
-		// Verify sCrypt claim unlocking script format:
-		// <capsule> <sig> <pubkey> OP_0
+		// Verify claim unlocking script format:
+		// <sig> <pubkey> <fileTxID||capsule> OP_TRUE
 		chunks, err := claimTx.Inputs[0].UnlockingScript.Chunks()
 		require.NoError(t, err)
 		require.Len(t, chunks, 4, "claim unlocking script should have 4 chunks")
 
-		// First chunk: capsule preimage data
-		assert.Equal(t, capsule, chunks[0].Data, "first chunk should be capsule preimage")
+		// First chunk: signature (DER + sighash flag)
+		assert.NotEmpty(t, chunks[0].Data, "first chunk should be signature")
 
-		// Second chunk: signature (DER + sighash flag)
-		assert.NotEmpty(t, chunks[1].Data, "second chunk should be signature")
+		// Second chunk: seller's compressed pubkey (33 bytes)
+		assert.Len(t, chunks[1].Data, CompressedPubKeyLen, "second chunk should be 33-byte pubkey")
 
-		// Third chunk: seller's compressed pubkey (33 bytes)
-		assert.Len(t, chunks[2].Data, CompressedPubKeyLen, "third chunk should be 33-byte pubkey")
+		// Third chunk: preimage (fileTxID || capsule)
+		expectedPreimage := make([]byte, 64)
+		copy(expectedPreimage, fileTxID)
+		copy(expectedPreimage[32:], capsule)
+		assert.Equal(t, expectedPreimage, chunks[2].Data, "third chunk should be fileTxID||capsule preimage")
 
-		// Fourth chunk: OP_0/OP_FALSE (method selector for claim, index 0)
-		assert.Equal(t, script.OpFALSE, chunks[3].Op, "last chunk should be OP_0 (claim method selector)")
+		// Fourth chunk: OP_TRUE (selects IF branch for claim)
+		assert.Equal(t, script.OpTRUE, chunks[3].Op, "last chunk should be OP_TRUE (claim branch selector)")
 	})
 
 	t.Run("nil params fields", func(t *testing.T) {
@@ -427,11 +430,11 @@ func TestBuildBuyerOnChainRefundTx(t *testing.T) {
 		assert.Len(t, refundTx.Outputs, 1)
 		assert.Greater(t, refundTx.Outputs[0].Satoshis, uint64(0))
 
-		// Verify the unlocking script matches sCrypt refund() format:
-		// <sig> <pubkey> <sighash_preimage> OP_1
+		// Verify the unlocking script matches refund format:
+		// <sig> <pubkey> OP_FALSE
 		chunks, err := refundTx.Inputs[0].UnlockingScript.Chunks()
 		require.NoError(t, err)
-		require.Len(t, chunks, 4, "refund unlocking script should have 4 chunks")
+		require.Len(t, chunks, 3, "refund unlocking script should have 3 chunks")
 
 		// First chunk: buyer's signature (DER + sighash flag)
 		assert.NotEmpty(t, chunks[0].Data, "first chunk should be signature")
@@ -442,13 +445,9 @@ func TestBuildBuyerOnChainRefundTx(t *testing.T) {
 		assert.Equal(t, buyerPriv.PubKey().Compressed(), chunks[1].Data,
 			"pubkey should match buyer's key")
 
-		// Third chunk: BIP143 sighash preimage (should be ~180+ bytes)
-		assert.Greater(t, len(chunks[2].Data), 100,
-			"third chunk should be BIP143 sighash preimage (>100 bytes)")
-
-		// Fourth chunk: OP_1/OP_TRUE (method selector for refund, index 1)
-		assert.Equal(t, script.OpTRUE, chunks[3].Op,
-			"last chunk should be OP_1 (refund method selector)")
+		// Third chunk: OP_FALSE (selects ELSE branch for refund)
+		assert.Equal(t, script.OpFALSE, chunks[2].Op,
+			"last chunk should be OP_FALSE (refund branch selector)")
 	})
 
 	t.Run("nil params", func(t *testing.T) {
@@ -879,7 +878,7 @@ func TestBuildHTLC_WithInvoiceID(t *testing.T) {
 
 func TestBuildHTLC_MissingInvoiceID_Rejected(t *testing.T) {
 	params := validHTLCParams()
-	params.InvoiceID = nil // mandatory in sCrypt artifact
+	params.InvoiceID = nil // mandatory
 
 	_, err := BuildHTLC(params)
 	assert.ErrorIs(t, err, ErrHTLCBuildFailed)
@@ -915,12 +914,12 @@ func TestExtractInvoiceIDFromHTLC(t *testing.T) {
 		assert.Equal(t, invoiceID, extracted)
 	})
 
-	t.Run("non-artifact script returns nil", func(t *testing.T) {
-		// A random script that doesn't match the artifact prefix.
+	t.Run("non-HTLC script returns nil", func(t *testing.T) {
+		// A random script that doesn't match the HTLC format.
 		randomScript := bytes.Repeat([]byte{0x01}, 200)
 		extracted, err := ExtractInvoiceIDFromHTLC(randomScript)
 		require.NoError(t, err)
-		assert.Nil(t, extracted, "non-artifact script should return nil invoice ID")
+		assert.Nil(t, extracted, "non-HTLC script should return nil invoice ID")
 	})
 
 	t.Run("empty script", func(t *testing.T) {
@@ -933,7 +932,7 @@ func TestExtractInvoiceIDFromHTLC(t *testing.T) {
 func TestExtractCapsuleHashFromHTLC(t *testing.T) {
 	params := validHTLCParams()
 
-	t.Run("standard artifact format", func(t *testing.T) {
+	t.Run("standard HTLC format", func(t *testing.T) {
 		scriptBytes, err := BuildHTLC(params)
 		require.NoError(t, err)
 
@@ -952,7 +951,7 @@ func TestExtractCapsuleHashFromHTLC(t *testing.T) {
 		assert.Equal(t, params.CapsuleHash, capsuleHash)
 	})
 
-	t.Run("non-artifact script returns error", func(t *testing.T) {
+	t.Run("non-HTLC script returns error", func(t *testing.T) {
 		randomScript := bytes.Repeat([]byte{0x01}, 200)
 		_, err := ExtractCapsuleHashFromHTLC(randomScript)
 		assert.Error(t, err)
@@ -1217,24 +1216,25 @@ func TestBuildHTLCFundingTx_TimeoutDefaults(t *testing.T) {
 }
 
 func TestBuildHTLC_TimeoutBounds(t *testing.T) {
+	// Timeout is no longer embedded in the script (removed OP_CLTV for BSV
+	// compatibility). BuildHTLC ignores timeout — it's only validated at the
+	// transaction level in BuildHTLCFundingTx and BuildBuyerRefundTx.
 	params := validHTLCParams()
 
-	t.Run("below minimum rejected", func(t *testing.T) {
+	t.Run("below minimum accepted", func(t *testing.T) {
 		p := *params
 		p.Timeout = MinHTLCTimeout - 1
-		_, err := BuildHTLC(&p)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrHTLCBuildFailed)
-		assert.Contains(t, err.Error(), "below minimum")
+		script, err := BuildHTLC(&p)
+		require.NoError(t, err)
+		assert.NotEmpty(t, script)
 	})
 
-	t.Run("above maximum rejected", func(t *testing.T) {
+	t.Run("above maximum accepted", func(t *testing.T) {
 		p := *params
 		p.Timeout = MaxHTLCTimeout + 1
-		_, err := BuildHTLC(&p)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrHTLCBuildFailed)
-		assert.Contains(t, err.Error(), "exceeds maximum")
+		script, err := BuildHTLC(&p)
+		require.NoError(t, err)
+		assert.NotEmpty(t, script)
 	})
 
 	t.Run("minimum accepted", func(t *testing.T) {
@@ -1270,14 +1270,14 @@ func TestBuildHTLCFundingTx_NoChangeOutput(t *testing.T) {
 	mockTxID[0] = 0x01
 
 	// Provide exactly enough for HTLC amount + fee without change.
-	// sCrypt HTLC script is ~972 bytes.
-	// baseTxSize ~= 10 + 148 + (8+1+972) ~= 1139 at 1 sat/byte.
-	// changeOutputSize = 34, so with-change fee ~= 1173.
-	// Set surplus between baseFee(1139) and withChangeFee(1173), e.g. 1160.
-	// totalInput(49160) > htlcAmount(48000) + baseFee(1139) = 49139 -> OK
-	// totalInput(49160) <= htlcAmount(48000) + withChangeFee(1173) = 49173 -> no change
+	// Plain Bitcoin Script HTLC is ~100-110 bytes.
+	// baseTxSize ~= 10 + 148 + (8+1+110) ~= 277 at 1 sat/byte.
+	// changeOutputSize = 34, so with-change fee ~= 311.
+	// Set surplus between baseFee(277) and withChangeFee(311), e.g. 300.
+	// totalInput(48300) > htlcAmount(48000) + baseFee(277) = 48277 -> OK
+	// totalInput(48300) <= htlcAmount(48000) + withChangeFee(311) = 48311 -> no change
 	htlcAmount := uint64(48000)
-	utxoAmount := uint64(49160) // surplus=1160, enough for baseFee but not withChangeFee
+	utxoAmount := uint64(48300) // surplus=300, enough for baseFee but not withChangeFee
 
 	result, err := BuildHTLCFundingTx(&HTLCFundingParams{
 		BuyerPrivKey: buyerPriv,
