@@ -29,7 +29,7 @@ const (
 	// BSV has removed the dust limit; 1 sat is the protocol minimum.
 	DustLimit = uint64(1)
 
-	// DefaultFeeRate is the default fee rate in sat/KB.
+	// DefaultFeeRate is the fallback fee rate in sat/KB when callers pass 0.
 	// 100 sat/KB == 0.1 sat/byte.
 	DefaultFeeRate = uint64(100)
 

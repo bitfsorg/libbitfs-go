@@ -189,6 +189,13 @@ func TestEstimateFee(t *testing.T) {
 	}
 }
 
+func TestEstimateFee_ZeroRateUsesDefaultFallback(t *testing.T) {
+	size := 1234
+	got := EstimateFee(size, 0)
+	want := EstimateFee(size, DefaultFeeRate)
+	assert.Equal(t, want, got)
+}
+
 func TestEstimateTxSize(t *testing.T) {
 	size := EstimateTxSize(1, 3, 100)
 	assert.Greater(t, size, 0)

@@ -71,7 +71,7 @@ type BuyerRefundParams struct {
 	FeeRate       uint64         // Satoshis per KB (0 = default)
 }
 
-// defaultHTLCFeeRate is the default fee rate for HTLC transactions.
+// defaultHTLCFeeRate is the fallback fee rate used when FeeRate is zero.
 const defaultHTLCFeeRate = uint64(100) // 100 sat/KB == 0.1 sat/byte
 
 // estimateFeeByKB returns ceil(txSizeBytes * satPerKB / 1000).

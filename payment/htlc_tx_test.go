@@ -22,6 +22,12 @@ func testHTLCInvoiceID() []byte {
 	return id
 }
 
+func TestEstimateFeeByKB_FeeRateZeroUsesFallback(t *testing.T) {
+	got := estimateFeeByKB(1000, 0)
+	want := estimateFeeByKB(1000, defaultHTLCFeeRate)
+	assert.Equal(t, want, got)
+}
+
 func TestVerifyHTLCFunding(t *testing.T) {
 	// Build a known HTLC script for test.
 	capsuleHash := bytes.Repeat([]byte{0xab}, 32)
