@@ -30,7 +30,8 @@ const (
 	DustLimit = uint64(1)
 
 	// DefaultFeeRate is the default fee rate in sat/KB.
-	DefaultFeeRate = uint64(1)
+	// 100 sat/KB == 0.1 sat/byte.
+	DefaultFeeRate = uint64(100)
 
 	// CompressedPubKeyLen is the length of a compressed public key.
 	CompressedPubKeyLen = 33

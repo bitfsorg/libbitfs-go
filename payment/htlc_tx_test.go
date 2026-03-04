@@ -253,7 +253,7 @@ func TestBuildHTLCFundingTx_FeeAccountsForScriptSize(t *testing.T) {
 			ScriptPubKey: p2pkhScript,
 		}},
 		ChangeAddr: changeAddr,
-		FeeRate:    1,
+		FeeRate:    100,
 		InvoiceID:  testHTLCInvoiceID(),
 	})
 	require.NoError(t, err)
@@ -269,10 +269,10 @@ func TestBuildHTLCFundingTx_FeeAccountsForScriptSize(t *testing.T) {
 	actualFee := uint64(100000) - totalOut
 	actualSize := uint64(len(result.RawTx))
 
-	// Fee should be approximately 1 sat/byte for the actual tx size.
-	// Allow a small margin (2 bytes) for fee estimation imprecision.
-	assert.GreaterOrEqual(t, actualFee+2, actualSize,
-		"fee must approximately cover actual transaction size at 1 sat/byte")
+	// Fee should approximately follow 100 sat/KB (0.1 sat/byte).
+	expectedMinFee := (actualSize*100 + 999) / 1000
+	assert.GreaterOrEqual(t, actualFee, expectedMinFee,
+		"fee must approximately cover actual transaction size at 100 sat/KB")
 }
 
 func TestBuildHTLCFundingTx_RejectsZeroAmount(t *testing.T) {
@@ -503,7 +503,7 @@ func TestBuildBuyerOnChainRefundTx(t *testing.T) {
 		_, err := BuildBuyerRefundTx(&BuyerRefundParams{
 			FundingTxID:   mockTxID[:],
 			FundingVout:   0,
-			FundingAmount: 100, // too small for any fee
+			FundingAmount: 20, // too small for estimated refund fee at 100 sat/KB
 			HTLCScript:    htlcScript,
 			BuyerPrivKey:  buyerPriv,
 			OutputAddr:    buyerAddr,
@@ -1270,14 +1270,12 @@ func TestBuildHTLCFundingTx_NoChangeOutput(t *testing.T) {
 	mockTxID[0] = 0x01
 
 	// Provide exactly enough for HTLC amount + fee without change.
-	// Plain Bitcoin Script HTLC is ~100-110 bytes.
-	// baseTxSize ~= 10 + 148 + (8+1+110) ~= 277 at 1 sat/byte.
-	// changeOutputSize = 34, so with-change fee ~= 311.
-	// Set surplus between baseFee(277) and withChangeFee(311), e.g. 300.
-	// totalInput(48300) > htlcAmount(48000) + baseFee(277) = 48277 -> OK
-	// totalInput(48300) <= htlcAmount(48000) + withChangeFee(311) = 48311 -> no change
+	// At 100 sat/KB:
+	//   base fee ~= ceil(277*100/1000) = 28
+	//   with-change fee ~= ceil(311*100/1000) = 32
+	// Pick surplus=30 so it is enough for base fee but not for change path.
 	htlcAmount := uint64(48000)
-	utxoAmount := uint64(48300) // surplus=300, enough for baseFee but not withChangeFee
+	utxoAmount := uint64(48030) // surplus=30, enough for baseFee but not withChangeFee
 
 	result, err := BuildHTLCFundingTx(&HTLCFundingParams{
 		BuyerPrivKey: buyerPriv,
@@ -1293,7 +1291,7 @@ func TestBuildHTLCFundingTx_NoChangeOutput(t *testing.T) {
 			ScriptPubKey: p2pkhScript,
 		}},
 		ChangeAddr: buyerPKH,
-		FeeRate:    1,
+		FeeRate:    100,
 		InvoiceID:  testHTLCInvoiceID(),
 	})
 	require.NoError(t, err)

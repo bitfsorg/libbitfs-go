@@ -31,7 +31,7 @@ type HTLCFundingParams struct {
 	Timeout      uint32         // Refund timeout in blocks (0 = DefaultHTLCTimeout). Must be in [MinHTLCTimeout, MaxHTLCTimeout].
 	UTXOs        []*HTLCUTXO    // Buyer's unspent outputs
 	ChangeAddr   []byte         // 20-byte change address hash
-	FeeRate      uint64         // Satoshis per byte (0 = use default)
+	FeeRate      uint64         // Satoshis per KB (0 = use default)
 	InvoiceID    []byte         // 16-byte invoice ID for replay protection (mandatory)
 }
 
@@ -54,7 +54,7 @@ type SellerClaimParams struct {
 	FileTxID      []byte         // 32-byte file transaction ID (binds capsule hash to file identity)
 	SellerPrivKey *ec.PrivateKey // Signs the claim
 	OutputAddr    []byte         // 20-byte destination P2PKH hash
-	FeeRate       uint64         // Satoshis per byte (0 = use default)
+	FeeRate       uint64         // Satoshis per KB (0 = use default)
 }
 
 // BuyerRefundParams holds parameters for building an on-chain refund transaction.
@@ -68,11 +68,19 @@ type BuyerRefundParams struct {
 	BuyerPrivKey  *ec.PrivateKey // Signs the refund
 	OutputAddr    []byte         // 20-byte destination P2PKH hash
 	Timeout       uint32         // Block height for nLockTime
-	FeeRate       uint64         // Satoshis per byte (0 = default)
+	FeeRate       uint64         // Satoshis per KB (0 = default)
 }
 
 // defaultHTLCFeeRate is the default fee rate for HTLC transactions.
-const defaultHTLCFeeRate = uint64(1) // 1 sat/byte
+const defaultHTLCFeeRate = uint64(100) // 100 sat/KB == 0.1 sat/byte
+
+// estimateFeeByKB returns ceil(txSizeBytes * satPerKB / 1000).
+func estimateFeeByKB(txSizeBytes, satPerKB uint64) uint64 {
+	if satPerKB == 0 {
+		satPerKB = defaultHTLCFeeRate
+	}
+	return (txSizeBytes*satPerKB + 999) / 1000
+}
 
 // VerifyHTLCFunding verifies a funding transaction has an output whose locking
 // script matches the expected HTLC script with at least minAmount satoshis.
@@ -189,7 +197,7 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 
 	// Estimate with change output first.
 	estSizeWithChange := baseTxSize + changeOutputSize
-	estFeeWithChange := estSizeWithChange * feeRate
+	estFeeWithChange := estimateFeeByKB(estSizeWithChange, feeRate)
 
 	// Determine if a change output is warranted.
 	totalNeededWithChange := htlcAmount + estFeeWithChange
@@ -199,7 +207,7 @@ func BuildHTLCFundingTx(params *HTLCFundingParams) (*HTLCFundingResult, error) {
 		estFee = estFeeWithChange
 	} else {
 		// No change output: recalculate fee without the change output size.
-		estFee = baseTxSize * feeRate
+		estFee = estimateFeeByKB(baseTxSize, feeRate)
 	}
 
 	totalNeeded := htlcAmount + estFee
@@ -326,7 +334,7 @@ func BuildSellerClaimTx(params *SellerClaimParams) (*transaction.Transaction, er
 	// Estimate claim tx size: ~10 overhead + ~(73+33+64+1) unlocking + script + ~40 output.
 	// The preimage is 64 bytes (fileTxID 32 + capsule 32).
 	estSize := 10 + 73 + 33 + 64 + 1 + uint64(len(params.HTLCScript)) + 40
-	estFee := estSize * feeRate
+	estFee := estimateFeeByKB(estSize, feeRate)
 
 	if params.FundingAmount <= estFee {
 		return nil, fmt.Errorf("%w: funding amount %d too small for fee %d",
@@ -462,7 +470,7 @@ func BuildBuyerRefundTx(params *BuyerRefundParams) (*transaction.Transaction, er
 	// Estimate refund tx size: ~10 overhead + ~(73 + 33 + 1) unlocking
 	// + script + ~40 output. No sighash preimage needed.
 	estSize := 10 + 73 + 33 + 1 + uint64(len(params.HTLCScript)) + 40
-	estFee := estSize * feeRate
+	estFee := estimateFeeByKB(estSize, feeRate)
 
 	if params.FundingAmount <= estFee {
 		return nil, fmt.Errorf("%w: funding amount %d too small for fee %d",

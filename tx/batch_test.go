@@ -257,7 +257,7 @@ func TestMutationBatch_ChangeUnderDust(t *testing.T) {
 	// Use numOps=1 to match what Build() does internally.
 	numOutputs := 3 // 1 OP_RETURN + 1 P2PKH + 1 potential change
 	estSize := EstimateTxSize(1, numOutputs, len("test payload data"), 1)
-	estFee := EstimateFee(estSize, 1)
+	estFee := EstimateFee(estSize, DefaultFeeRate)
 	feeAmount := DustLimit + estFee + 1 // change = 1 sat <= dust
 
 	batch.AddFeeInput(testFeeUTXO(t, feeAmount))
@@ -300,7 +300,7 @@ func TestMutationBatch_OpDelete_NoRefresh(t *testing.T) {
 		PubKey:     pub,
 		ParentTxID: bytes.Repeat([]byte{0xaa}, 32),
 		Payload:    []byte("delete-payload"),
-		InputUTXO:  &UTXO{TxID: bytes.Repeat([]byte{0x01}, 32), Vout: 0, Amount: 1, PrivateKey: priv},
+		InputUTXO:  &UTXO{TxID: bytes.Repeat([]byte{0x02}, 32), Vout: 0, Amount: 1, PrivateKey: priv},
 		PrivateKey: priv,
 	})
 	batch.AddFeeInput(testFeeUTXO(t, 5000))
