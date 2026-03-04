@@ -39,13 +39,38 @@ type Config struct {
 	LogFile string
 }
 
-// DefaultDataDir returns the default data directory path (~/.bitfs).
+// DefaultDataDir returns the default data directory path.
+// Priority:
+//  1. BITFS_DATADIR env override
+//  2. BITFS_NETWORK-aware default (mainnet/testnet/regtest)
+//  3. mainnet default when network is empty/unknown
 func DefaultDataDir() string {
+	if v := strings.TrimSpace(os.Getenv("BITFS_DATADIR")); v != "" {
+		return v
+	}
+	return DefaultDataDirForNetwork(os.Getenv("BITFS_NETWORK"))
+}
+
+// DefaultDataDirForNetwork returns the default data directory path for the
+// given network.
+//   - mainnet -> ~/.bitfs
+//   - testnet -> ~/.bitfs-testnet
+//   - regtest -> ~/.regtest
+func DefaultDataDirForNetwork(network string) string {
+	network = strings.ToLower(strings.TrimSpace(network))
+	dirName := ".bitfs"
+	switch network {
+	case "testnet":
+		dirName = ".bitfs-testnet"
+	case "regtest":
+		dirName = ".regtest"
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".bitfs"
+		return dirName
 	}
-	return filepath.Join(home, ".bitfs")
+	return filepath.Join(home, dirName)
 }
 
 // DefaultConfig returns a Config populated with sensible defaults.

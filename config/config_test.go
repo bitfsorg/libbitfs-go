@@ -18,6 +18,9 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestDefaultConfig(t *testing.T) {
+	t.Setenv("BITFS_DATADIR", "")
+	t.Setenv("BITFS_NETWORK", "")
+
 	cfg := DefaultConfig()
 
 	tests := []struct {
@@ -269,9 +272,55 @@ func TestConfigPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDefaultDataDir_EndsWith_DotBitfs(t *testing.T) {
+	t.Setenv("BITFS_DATADIR", "")
+	t.Setenv("BITFS_NETWORK", "")
+
 	dir := DefaultDataDir()
 	if !strings.HasSuffix(dir, ".bitfs") {
 		t.Errorf("DefaultDataDir() = %q, want suffix %q", dir, ".bitfs")
+	}
+}
+
+func TestDefaultDataDirForNetwork(t *testing.T) {
+	tests := []struct {
+		network string
+		suffix  string
+	}{
+		{network: "mainnet", suffix: ".bitfs"},
+		{network: "testnet", suffix: ".bitfs-testnet"},
+		{network: "regtest", suffix: ".regtest"},
+		{network: "", suffix: ".bitfs"},
+		{network: "unknown", suffix: ".bitfs"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.network, func(t *testing.T) {
+			dir := DefaultDataDirForNetwork(tc.network)
+			if !strings.HasSuffix(dir, tc.suffix) {
+				t.Errorf("DefaultDataDirForNetwork(%q) = %q, want suffix %q", tc.network, dir, tc.suffix)
+			}
+		})
+	}
+}
+
+func TestDefaultDataDir_UsesBITFSNetwork(t *testing.T) {
+	t.Setenv("BITFS_DATADIR", "")
+	t.Setenv("BITFS_NETWORK", "testnet")
+
+	dir := DefaultDataDir()
+	if !strings.HasSuffix(dir, ".bitfs-testnet") {
+		t.Errorf("DefaultDataDir() with BITFS_NETWORK=testnet = %q, want suffix %q", dir, ".bitfs-testnet")
+	}
+}
+
+func TestDefaultDataDir_UsesBITFSDatadirOverride(t *testing.T) {
+	custom := "/tmp/custom-bitfs-dir"
+	t.Setenv("BITFS_DATADIR", custom)
+	t.Setenv("BITFS_NETWORK", "regtest")
+
+	dir := DefaultDataDir()
+	if dir != custom {
+		t.Errorf("DefaultDataDir() with BITFS_DATADIR override = %q, want %q", dir, custom)
 	}
 }
 
