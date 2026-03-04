@@ -32,11 +32,11 @@ func isValidAlias(alias string) bool {
 
 // WalletState holds persisted wallet metadata.
 type WalletState struct {
-	NextReceiveIndex uint32           `json:"next_receive_index"`            // Fee chain next receive address
-	NextChangeIndex  uint32           `json:"next_change_index"`             // Fee chain next change address
-	Vaults           []Vault          `json:"vaults"`                        //
-	NextVaultIndex   uint32           `json:"next_vault_index"`              // Next available vault account index
-	PaymailBindings  []PaymailBinding `json:"paymail_bindings,omitempty"`    //
+	NextReceiveIndex uint32           `json:"next_receive_index"`         // Fee chain next receive address
+	NextChangeIndex  uint32           `json:"next_change_index"`          // Fee chain next change address
+	Vaults           []Vault          `json:"vaults"`
+	NextVaultIndex   uint32           `json:"next_vault_index"`           // Next available vault account index
+	PaymailBindings  []PaymailBinding `json:"paymail_bindings,omitempty"`
 }
 
 // NewWalletState creates a new empty WalletState.
@@ -229,15 +229,11 @@ func (w *Wallet) BindPaymail(state *WalletState, alias, vaultName string) error 
 		return err
 	}
 
-	// Check alias uniqueness.
+	// Check alias and vault uniqueness (1:1 constraint).
 	for _, b := range state.PaymailBindings {
 		if b.Alias == alias {
 			return fmt.Errorf("%w: %q", ErrAliasExists, alias)
 		}
-	}
-
-	// Check vault uniqueness (1:1 constraint).
-	for _, b := range state.PaymailBindings {
 		if b.Vault == vaultName {
 			return fmt.Errorf("%w: %q", ErrVaultAlreadyBound, vaultName)
 		}
@@ -263,7 +259,7 @@ func (w *Wallet) UnbindPaymail(state *WalletState, alias string) error {
 
 // ListPaymailBindings returns all paymail bindings.
 func (w *Wallet) ListPaymailBindings(state *WalletState) []PaymailBinding {
-	if state.PaymailBindings == nil {
+	if len(state.PaymailBindings) == 0 {
 		return nil
 	}
 	// Return a copy to avoid mutation.
