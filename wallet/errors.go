@@ -35,4 +35,19 @@ var (
 
 	// ErrDerivationFailed indicates BIP32 key derivation failed.
 	ErrDerivationFailed = errors.New("wallet: key derivation failed")
+
+	// ErrAliasExists indicates the paymail alias is already bound.
+	ErrAliasExists = errors.New("wallet: paymail alias already exists")
+
+	// ErrAliasNotFound indicates the paymail alias does not exist.
+	ErrAliasNotFound = errors.New("wallet: paymail alias not found")
+
+	// ErrInvalidAlias indicates the paymail alias format is invalid.
+	ErrInvalidAlias = errors.New("wallet: invalid paymail alias format")
+
+	// ErrVaultAlreadyBound indicates the vault already has a paymail binding.
+	ErrVaultAlreadyBound = errors.New("wallet: vault already has a paymail binding")
+
+	// ErrUnsupportedKeyFormat indicates an unsupported key export format.
+	ErrUnsupportedKeyFormat = errors.New("wallet: unsupported key export format")
 )

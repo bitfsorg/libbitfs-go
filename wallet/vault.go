@@ -1,6 +1,10 @@
 package wallet
 
-import "fmt"
+import (
+	"encoding/hex"
+	"fmt"
+	"regexp"
+)
 
 // Vault represents an independent Metanet directory tree.
 // Each Vault = one BIP32 account = one independent Metanet tree.
@@ -11,12 +15,28 @@ type Vault struct {
 	Deleted      bool   `json:"deleted"`       // Soft-deleted flag
 }
 
+// PaymailBinding maps a paymail alias to a vault (1:1 relationship).
+type PaymailBinding struct {
+	Alias string `json:"alias"`
+	Vault string `json:"vault"`
+}
+
+// aliasPattern validates paymail alias format: lowercase alphanumeric, dots,
+// hyphens, underscores. Must start with alphanumeric. Max 64 chars.
+var aliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// isValidAlias checks whether the given alias matches the allowed format.
+func isValidAlias(alias string) bool {
+	return aliasPattern.MatchString(alias)
+}
+
 // WalletState holds persisted wallet metadata.
 type WalletState struct {
-	NextReceiveIndex uint32  `json:"next_receive_index"` // Fee chain next receive address
-	NextChangeIndex  uint32  `json:"next_change_index"`  // Fee chain next change address
-	Vaults           []Vault `json:"vaults"`
-	NextVaultIndex   uint32  `json:"next_vault_index"` // Next available vault account index
+	NextReceiveIndex uint32           `json:"next_receive_index"`            // Fee chain next receive address
+	NextChangeIndex  uint32           `json:"next_change_index"`             // Fee chain next change address
+	Vaults           []Vault          `json:"vaults"`                        //
+	NextVaultIndex   uint32           `json:"next_vault_index"`              // Next available vault account index
+	PaymailBindings  []PaymailBinding `json:"paymail_bindings,omitempty"`    //
 }
 
 // NewWalletState creates a new empty WalletState.
@@ -56,6 +76,35 @@ func (ws *WalletState) Validate() error {
 	// NextVaultIndex must be >= max seen index + 1 (to avoid reuse).
 	if len(seen) > 0 && ws.NextVaultIndex < maxIdx {
 		return fmt.Errorf("NextVaultIndex (%d) is less than max account index + 1 (%d)", ws.NextVaultIndex, maxIdx)
+	}
+
+	// Validate paymail bindings.
+	activeVaults := make(map[string]bool)
+	for _, v := range ws.Vaults {
+		if !v.Deleted {
+			activeVaults[v.Name] = true
+		}
+	}
+
+	seenAliases := make(map[string]bool)
+	seenBoundVaults := make(map[string]bool)
+	for _, b := range ws.PaymailBindings {
+		if !isValidAlias(b.Alias) {
+			return fmt.Errorf("paymail binding: invalid alias format %q", b.Alias)
+		}
+		if seenAliases[b.Alias] {
+			return fmt.Errorf("paymail binding: duplicate alias %q", b.Alias)
+		}
+		seenAliases[b.Alias] = true
+
+		if seenBoundVaults[b.Vault] {
+			return fmt.Errorf("paymail binding: vault %q bound more than once", b.Vault)
+		}
+		seenBoundVaults[b.Vault] = true
+
+		if !activeVaults[b.Vault] {
+			return fmt.Errorf("paymail binding: alias %q references non-existent vault %q", b.Alias, b.Vault)
+		}
 	}
 
 	return nil
@@ -111,7 +160,7 @@ func (w *Wallet) ListVaults(state *WalletState) []Vault {
 	return active
 }
 
-// RenameVault renames an existing vault.
+// RenameVault renames an existing vault. Any paymail binding is also updated.
 func (w *Wallet) RenameVault(state *WalletState, oldName, newName string) error {
 	// Check new name doesn't conflict
 	for _, v := range state.Vaults {
@@ -120,23 +169,140 @@ func (w *Wallet) RenameVault(state *WalletState, oldName, newName string) error 
 		}
 	}
 
+	found := false
 	for i := range state.Vaults {
 		if state.Vaults[i].Name == oldName && !state.Vaults[i].Deleted {
 			state.Vaults[i].Name = newName
-			return nil
+			found = true
+			break
 		}
 	}
-	return fmt.Errorf("%w: %q", ErrVaultNotFound, oldName)
+	if !found {
+		return fmt.Errorf("%w: %q", ErrVaultNotFound, oldName)
+	}
+
+	// Update paymail binding vault reference.
+	for i := range state.PaymailBindings {
+		if state.PaymailBindings[i].Vault == oldName {
+			state.PaymailBindings[i].Vault = newName
+			break
+		}
+	}
+
+	return nil
 }
 
 // DeleteVault marks a vault as deleted (soft delete).
-// The account index is not reused.
+// The account index is not reused. Any paymail binding is also removed.
 func (w *Wallet) DeleteVault(state *WalletState, name string) error {
+	found := false
 	for i := range state.Vaults {
 		if state.Vaults[i].Name == name && !state.Vaults[i].Deleted {
 			state.Vaults[i].Deleted = true
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("%w: %q", ErrVaultNotFound, name)
+	}
+
+	// Remove paymail binding for the deleted vault.
+	for i, b := range state.PaymailBindings {
+		if b.Vault == name {
+			state.PaymailBindings = append(state.PaymailBindings[:i], state.PaymailBindings[i+1:]...)
+			break
+		}
+	}
+
+	return nil
+}
+
+// BindPaymail creates a 1:1 mapping between a paymail alias and a vault.
+func (w *Wallet) BindPaymail(state *WalletState, alias, vaultName string) error {
+	if !isValidAlias(alias) {
+		return fmt.Errorf("%w: %q", ErrInvalidAlias, alias)
+	}
+
+	// Verify vault exists.
+	if _, err := w.GetVault(state, vaultName); err != nil {
+		return err
+	}
+
+	// Check alias uniqueness.
+	for _, b := range state.PaymailBindings {
+		if b.Alias == alias {
+			return fmt.Errorf("%w: %q", ErrAliasExists, alias)
+		}
+	}
+
+	// Check vault uniqueness (1:1 constraint).
+	for _, b := range state.PaymailBindings {
+		if b.Vault == vaultName {
+			return fmt.Errorf("%w: %q", ErrVaultAlreadyBound, vaultName)
+		}
+	}
+
+	state.PaymailBindings = append(state.PaymailBindings, PaymailBinding{
+		Alias: alias,
+		Vault: vaultName,
+	})
+	return nil
+}
+
+// UnbindPaymail removes a paymail alias binding.
+func (w *Wallet) UnbindPaymail(state *WalletState, alias string) error {
+	for i, b := range state.PaymailBindings {
+		if b.Alias == alias {
+			state.PaymailBindings = append(state.PaymailBindings[:i], state.PaymailBindings[i+1:]...)
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: %q", ErrVaultNotFound, name)
+	return fmt.Errorf("%w: %q", ErrAliasNotFound, alias)
+}
+
+// ListPaymailBindings returns all paymail bindings.
+func (w *Wallet) ListPaymailBindings(state *WalletState) []PaymailBinding {
+	if state.PaymailBindings == nil {
+		return nil
+	}
+	// Return a copy to avoid mutation.
+	out := make([]PaymailBinding, len(state.PaymailBindings))
+	copy(out, state.PaymailBindings)
+	return out
+}
+
+// ResolvePaymailAlias returns the vault name bound to the given alias.
+func (w *Wallet) ResolvePaymailAlias(state *WalletState, alias string) (string, error) {
+	for _, b := range state.PaymailBindings {
+		if b.Alias == alias {
+			return b.Vault, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %q", ErrAliasNotFound, alias)
+}
+
+// ExportVaultKey exports the vault root key in the specified format.
+// Supported formats: "wif", "hex", "seed-path".
+func (w *Wallet) ExportVaultKey(state *WalletState, vaultName, format string) (string, error) {
+	vault, err := w.GetVault(state, vaultName)
+	if err != nil {
+		return "", err
+	}
+
+	kp, err := w.DeriveVaultRootKey(vault.AccountIndex)
+	if err != nil {
+		return "", err
+	}
+
+	switch format {
+	case "wif":
+		return kp.PrivateKey.Wif(), nil
+	case "hex":
+		return hex.EncodeToString(kp.PrivateKey.Serialize()), nil
+	case "seed-path":
+		return kp.Path, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnsupportedKeyFormat, format)
+	}
 }
