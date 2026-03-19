@@ -178,7 +178,7 @@ type Node struct {
 	RegistryTxID      []byte     // Registry UTXO TxID (32 bytes)
 	RegistryVout      uint32     // Registry UTXO output index
 	ISO               *ISOConfig // ISO configuration (nil = no ISO)
-	ACLRef            []byte     // ACL reference (group pubkey hash or ACL TxID)
+	ACLRef            []byte     // ACL reference (ACL node compressed pubkey, 33 bytes)
 
 	// Anchor-specific fields (NodeTypeAnchor only)
 	TreeRootPNode    []byte   // Root directory's P_node (33 bytes)
