@@ -204,9 +204,19 @@ func (w *WoCClient) ListUnspent(ctx context.Context, address string) ([]*UTXO, e
 			return nil, fmt.Errorf("woc: list unspent: %w", err)
 		}
 
+		// WoC /unspent/all returns either a flat array or a wrapped object
+		// {"address":"...","result":[...],"nextPageToken":"..."}.
 		var items []wocUnspentItem
 		if err := json.Unmarshal(body, &items); err != nil {
-			return nil, fmt.Errorf("%w: unmarshal unspent: %w: %s", ErrInvalidResponse, err, truncate(string(body), 128))
+			// Try wrapped format.
+			var wrapped struct {
+				Result        []wocUnspentItem `json:"result"`
+				NextPageToken string           `json:"nextPageToken"`
+			}
+			if err2 := json.Unmarshal(body, &wrapped); err2 != nil {
+				return nil, fmt.Errorf("%w: unmarshal unspent: %w: %s", ErrInvalidResponse, err, truncate(string(body), 128))
+			}
+			items = wrapped.Result
 		}
 
 		if len(items) == 0 {
