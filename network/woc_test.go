@@ -159,7 +159,9 @@ func TestWoCClient_GetMerkleProof(t *testing.T) {
 	assert.Equal(t, 3, proof.Index)
 	require.Len(t, proof.Branches, 2)
 
-	expectedBytes, _ := hex.DecodeString(nodeHash)
+	// Branches are reversed from display (big-endian) to internal (little-endian).
+	displayBytes, _ := hex.DecodeString(nodeHash)
+	expectedBytes := reverseBytesCopy(displayBytes)
 	assert.Equal(t, expectedBytes, proof.Branches[0])
 	assert.Nil(t, proof.Branches[1]) // "*" -> nil sentinel
 }
@@ -284,12 +286,18 @@ func TestWoCClient_GetUTXO_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTxNotFound)
 }
 
-func TestWoCClient_BroadcastTx_ReturnsError(t *testing.T) {
-	client := NewWoCClient(WoCConfig{BaseURL: "http://unused"})
+func TestWoCClient_BroadcastTx_RejectsInvalidTx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/tx/raw", r.URL.Path)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`"TX decode failed"`))
+	}))
+	defer srv.Close()
+	client := NewWoCClient(WoCConfig{BaseURL: srv.URL})
 	_, err := client.BroadcastTx(context.Background(), "deadbeef")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrBroadcastRejected)
-	assert.Contains(t, err.Error(), "use ARC")
 }
 
 func TestWoCClient_ImportAddress_NoOp(t *testing.T) {
