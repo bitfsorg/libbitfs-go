@@ -211,8 +211,14 @@ func (v *Vault) copyInner(opts *CopyOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: batch copy tx: %w", err)
 	}
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(txHex); err != nil {
+		return nil, fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	success = true
-	txIDHex := hex.EncodeToString(result.TxID)
+
+	txIDHex := internalToDisplay(result.TxID)
 
 	// 12. Update local state.
 	childState := &NodeState{

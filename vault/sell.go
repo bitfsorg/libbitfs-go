@@ -113,8 +113,14 @@ func (v *Vault) sellInner(opts *SellOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: batch sell tx: %w", err)
 	}
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(txHex); err != nil {
+		return nil, fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	success = true
-	txIDHex := hex.EncodeToString(result.TxID)
+
+	txIDHex := internalToDisplay(result.TxID)
 
 	nodeState.TxID = txIDHex
 	nodeState.Access = "paid"

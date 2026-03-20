@@ -143,8 +143,14 @@ func (v *Vault) encryptNodeInner(opts *EncryptOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: batch encrypt tx: %w", err)
 	}
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(txHex); err != nil {
+		return nil, fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	success = true
-	txIDHex := hex.EncodeToString(result.TxID)
+
+	txIDHex := internalToDisplay(result.TxID)
 
 	// Update local state.
 	nodeState.TxID = txIDHex

@@ -87,9 +87,14 @@ func (c *WoCARCClient) ImportAddress(ctx context.Context, address string) error 
 
 // ---------- Broadcast → ARC ----------
 
-// BroadcastTx submits a raw transaction hex to the ARC network and returns the txid.
+// BroadcastTx submits a raw transaction hex. Tries ARC first, falls back to WoC.
 func (c *WoCARCClient) BroadcastTx(ctx context.Context, rawTxHex string) (string, error) {
-	return c.arc.BroadcastTx(ctx, rawTxHex)
+	txid, err := c.arc.BroadcastTx(ctx, rawTxHex)
+	if err == nil {
+		return txid, nil
+	}
+	// ARC failed — try WoC as fallback.
+	return c.woc.BroadcastTx(ctx, rawTxHex)
 }
 
 // ---------- BlockHashProvider implementation → WoC ----------

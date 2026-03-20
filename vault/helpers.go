@@ -193,12 +193,17 @@ func (v *Vault) buildAndSignRootTx(kp *wallet.KeyPair, node *metanet.Node, nodeP
 		return nil, fmt.Errorf("vault: batch root tx: %w", err)
 	}
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(txHex); err != nil {
+		return nil, fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	success = true
 	v.TrackBatchUTXOs(result, []string{nodePubHex}, changePubHex)
 
 	return &Result{
 		TxHex:   txHex,
-		TxID:    hex.EncodeToString(result.TxID),
+		TxID:    internalToDisplay(result.TxID),
 		Message: "Root node created",
 		NodePub: nodePubHex,
 	}, nil

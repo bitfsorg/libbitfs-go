@@ -137,8 +137,14 @@ func (v *Vault) buildParentSelfUpdate(parent *NodeState) (txHex string, txIDHex 
 		return "", "", fmt.Errorf("batch self-update tx: %w", err)
 	}
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(signedHex); err != nil {
+		return "", "", fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	success = true
-	txIDHex = hex.EncodeToString(result.TxID)
+
+	txIDHex = internalToDisplay(result.TxID)
 
 	v.TrackBatchUTXOs(result, []string{parent.PubKeyHex}, changePubHex)
 

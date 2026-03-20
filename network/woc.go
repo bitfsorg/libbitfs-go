@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bsv-blockchain/go-sdk/script"
 )
 
 // Compile-time interface checks.
@@ -182,6 +184,7 @@ type wocUnspentItem struct {
 	TxPos  uint32 `json:"tx_pos"`
 	TxHash string `json:"tx_hash"`
 	Value  uint64 `json:"value"`
+	Hex    string `json:"hex"` // ScriptPubKey hex from WoC
 }
 
 // ListUnspent returns all unspent transaction outputs for the given address.
@@ -228,10 +231,16 @@ func (w *WoCClient) ListUnspent(ctx context.Context, address string) ([]*UTXO, e
 			if item.Height > 0 {
 				confirmations = 1 // At least 1 confirmation if mined.
 			}
+			scriptHex := item.Hex
+			// Confirmed UTXOs may omit hex; derive P2PKH script from address.
+			if scriptHex == "" {
+				scriptHex = addressToP2PKHHex(address)
+			}
 			allUTXOs = append(allUTXOs, &UTXO{
 				TxID:          item.TxHash,
 				Vout:          item.TxPos,
 				Amount:        item.Value,
+				ScriptPubKey:  scriptHex,
 				Address:       address,
 				Confirmations: confirmations,
 			})
@@ -299,8 +308,33 @@ func (w *WoCClient) GetUTXO(ctx context.Context, txid string, vout uint32) (*UTX
 }
 
 // BroadcastTx is not supported by WoCClient. Use ARC for transaction broadcast.
-func (w *WoCClient) BroadcastTx(_ context.Context, _ string) (string, error) {
-	return "", fmt.Errorf("%w: WoC does not support broadcast, use ARC", ErrBroadcastRejected)
+func (w *WoCClient) BroadcastTx(ctx context.Context, rawTxHex string) (string, error) {
+	url := w.baseURL + "/tx/raw"
+	payload := fmt.Sprintf(`{"txhex":"%s"}`, rawTxHex)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("woc: create broadcast request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if w.apiKey != "" {
+		req.Header.Set("woc-api-key", w.apiKey)
+	}
+
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrConnectionFailed, err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, wocMaxRespBytes))
+	_ = resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("%w: HTTP %d: %s", ErrBroadcastRejected, resp.StatusCode, truncate(string(body), 256))
+	}
+
+	// WoC returns the txid as a JSON string (quoted).
+	txid := strings.Trim(strings.TrimSpace(string(body)), "\"")
+	return txid, nil
 }
 
 // GetRawTx returns the raw transaction bytes for the given txid.
@@ -432,9 +466,14 @@ func (w *WoCClient) GetMerkleProof(ctx context.Context, txid string) (*MerklePro
 		return nil, fmt.Errorf("woc: get merkle proof: %w", err)
 	}
 
+	// WoC may return a single object or an array of objects.
 	var proof wocTSCProof
 	if err := json.Unmarshal(body, &proof); err != nil {
-		return nil, fmt.Errorf("%w: unmarshal tsc proof: %w", ErrInvalidResponse, err)
+		var proofs []wocTSCProof
+		if err2 := json.Unmarshal(body, &proofs); err2 != nil || len(proofs) == 0 {
+			return nil, fmt.Errorf("%w: unmarshal tsc proof: %w", ErrInvalidResponse, err)
+		}
+		proof = proofs[0]
 	}
 
 	branches := make([][]byte, 0, len(proof.Nodes))
@@ -448,7 +487,8 @@ func (w *WoCClient) GetMerkleProof(ctx context.Context, txid string) (*MerklePro
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid node hash at index %d: %w", ErrInvalidResponse, i, err)
 		}
-		branches = append(branches, b)
+		// WoC returns hashes in display (big-endian); reverse to internal order.
+		branches = append(branches, reverseBytesCopy(b))
 	}
 
 	return &MerkleProof{
@@ -522,6 +562,24 @@ func isHex(s string) bool {
 		}
 	}
 	return len(s) > 0
+}
+
+// addressToP2PKHHex converts a base58check address to its P2PKH locking script hex.
+// Returns empty string if the address cannot be decoded.
+func addressToP2PKHHex(address string) string {
+	addr, err := script.NewAddressFromString(address)
+	if err != nil || len(addr.PublicKeyHash) != 20 {
+		return ""
+	}
+	// OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
+	s := make([]byte, 25)
+	s[0] = 0x76 // OP_DUP
+	s[1] = 0xa9 // OP_HASH160
+	s[2] = 0x14 // push 20 bytes
+	copy(s[3:23], addr.PublicKeyHash)
+	s[23] = 0x88 // OP_EQUALVERIFY
+	s[24] = 0xac // OP_CHECKSIG
+	return hex.EncodeToString(s)
 }
 
 // btcToSat and reverseBytesCopy are defined in rpc_blockchain.go.

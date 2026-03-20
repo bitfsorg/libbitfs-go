@@ -159,8 +159,14 @@ func (v *Vault) removeInner(opts *RemoveOpts) (*Result, error) {
 		return nil, fmt.Errorf("vault: batch remove tx: %w", err)
 	}
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(txHex); err != nil {
+		return nil, fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	success = true
-	txIDHex := hex.EncodeToString(result.TxID)
+
+	txIDHex := internalToDisplay(result.TxID)
 
 	// Apply state changes atomically.
 	nodeState.TxID = txIDHex

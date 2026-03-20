@@ -382,8 +382,14 @@ func (v *Vault) crossDirectoryMove(opts *MoveOpts, srcNodeState *NodeState) (*Re
 	}
 	storedKeyHash = encResult.KeyHash // mark for deferred rollback if allSuccess stays false
 
+	// Broadcast transaction if online.
+	if err := v.broadcastIfOnline(txHex); err != nil {
+		return nil, fmt.Errorf("vault: broadcast: %w", err)
+	}
+
 	allSuccess = true
-	txIDHex := hex.EncodeToString(result.TxID)
+
+	txIDHex := internalToDisplay(result.TxID)
 
 	// --- Apply state changes ---
 

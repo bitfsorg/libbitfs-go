@@ -318,11 +318,23 @@ func (v *Vault) AllocateFeeUTXOWithState(minAmount uint64) (*tx.UTXO, *UTXOState
 	return txU, utxoState, nil
 }
 
+// internalToDisplay converts internal byte order (little-endian) txid bytes
+// to display-format hex string (big-endian).
+func internalToDisplay(leBytes []byte) string {
+	rev := make([]byte, len(leBytes))
+	for i, j := 0, len(leBytes)-1; i <= j; i, j = i+1, j-1 {
+		rev[i], rev[j] = leBytes[j], leBytes[i]
+	}
+	return hex.EncodeToString(rev)
+}
+
 // utxoStateToTx converts a UTXOState to a tx.UTXO with private key attached.
 func (v *Vault) utxoStateToTx(us *UTXOState) (*tx.UTXO, error) {
-	txID, err := hex.DecodeString(us.TxID)
-	if err != nil {
-		return nil, fmt.Errorf("vault: invalid UTXO txid: %w", err)
+	// UTXOState.TxID is display format (big-endian hex). Convert to internal
+	// (little-endian) for go-sdk chainhash.
+	txID := displayHexToInternal(us.TxID)
+	if len(txID) != 32 {
+		return nil, fmt.Errorf("vault: invalid UTXO txid: %s", us.TxID)
 	}
 	scriptPK, err := hex.DecodeString(us.ScriptPubKey)
 	if err != nil {
@@ -456,7 +468,7 @@ func (v *Vault) TrackParentRefreshUTXO(mtx *tx.MetanetTx, parentPubHex string) {
 // opPubKeys maps op index -> pubkey hex for the node that op creates/updates.
 // changePubHex is the change address owner.
 func (v *Vault) TrackBatchUTXOs(result *tx.BatchResult, opPubKeys []string, changePubHex string) {
-	txIDHex := hex.EncodeToString(result.TxID)
+	txIDHex := internalToDisplay(result.TxID)
 
 	for i, opResult := range result.NodeOps {
 		if opResult.NodeUTXO == nil {
@@ -498,6 +510,16 @@ func (v *Vault) TrackBatchUTXOs(result *tx.BatchResult, opPubKeys []string, chan
 // IsOnline returns true if a blockchain service is configured.
 func (v *Vault) IsOnline() bool {
 	return v.Chain != nil
+}
+
+// broadcastIfOnline broadcasts the signed transaction if a blockchain service
+// is configured. Returns nil silently when offline (no Chain).
+func (v *Vault) broadcastIfOnline(txHex string) error {
+	if v.Chain == nil {
+		return nil
+	}
+	_, err := v.BroadcastTx(context.Background(), txHex)
+	return err
 }
 
 // BroadcastTx submits a signed transaction to the network.
