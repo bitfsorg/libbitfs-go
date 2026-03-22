@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -26,6 +27,12 @@ import (
 // Read-only methods (VerifyTx, ResolveVaultIndex, IsOnline) may be called
 // concurrently. Do not call DeriveChangeAddr, AllocateFeeUTXO, or
 // AllocateFeeUTXOWithState outside of withWriteLock. [Audit fix H-1]
+
+// ErrInsufficientFunds is returned when no fee UTXO has enough balance
+// for the requested operation. Callers can use errors.Is to detect this
+// and show funding guidance (e.g. BSV purchase links).
+var ErrInsufficientFunds = errors.New("insufficient funds")
+
 type Vault struct {
 	Wallet   *wallet.Wallet
 	WState   *wallet.WalletState
@@ -295,7 +302,7 @@ func (v *Vault) DeriveChangeAddr() ([]byte, *ec.PrivateKey, error) {
 func (v *Vault) AllocateFeeUTXO(minAmount uint64) (*tx.UTXO, error) {
 	utxoState := v.State.AllocateFeeUTXO(minAmount)
 	if utxoState == nil {
-		return nil, fmt.Errorf("vault: no fee UTXO with >= %d sats; run 'bitfs fund' first", minAmount)
+		return nil, fmt.Errorf("vault: no fee UTXO with >= %d sats; run 'bitfs fund' first: %w", minAmount, ErrInsufficientFunds)
 	}
 	return v.utxoStateToTx(utxoState)
 }
@@ -307,7 +314,7 @@ func (v *Vault) AllocateFeeUTXO(minAmount uint64) (*tx.UTXO, error) {
 func (v *Vault) AllocateFeeUTXOWithState(minAmount uint64) (*tx.UTXO, *UTXOState, error) {
 	utxoState := v.State.AllocateFeeUTXO(minAmount)
 	if utxoState == nil {
-		return nil, nil, fmt.Errorf("vault: no fee UTXO with >= %d sats; run 'bitfs fund' first", minAmount)
+		return nil, nil, fmt.Errorf("vault: no fee UTXO with >= %d sats; run 'bitfs fund' first: %w", minAmount, ErrInsufficientFunds)
 	}
 	txU, err := v.utxoStateToTx(utxoState)
 	if err != nil {
