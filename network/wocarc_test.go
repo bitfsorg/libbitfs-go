@@ -85,6 +85,31 @@ func TestWoCARCClient_BroadcastRoutesToARC(t *testing.T) {
 	assert.Equal(t, "broadcast123", txid)
 }
 
+func TestWoCARCClient_BroadcastNoWoCFallback(t *testing.T) {
+	wocCalled := false
+	wocSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wocCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `"woc-txid"`)
+	}))
+	defer wocSrv.Close()
+
+	arcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"detail":"internal error"}`)
+	}))
+	defer arcSrv.Close()
+
+	client := &WoCARCClient{
+		woc: newTestWoC(wocSrv),
+		arc: NewARCClient(ARCConfig{BaseURL: arcSrv.URL + "/v1"}),
+	}
+
+	_, err := client.BroadcastTx(context.Background(), "0100000001...")
+	require.Error(t, err, "ARC failure should return error, not fall back to WoC")
+	assert.False(t, wocCalled, "WoC should not be called when ARC fails")
+}
+
 func TestDefaultWoCARCEndpoints(t *testing.T) {
 	tests := []struct {
 		network string
