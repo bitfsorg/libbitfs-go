@@ -127,22 +127,37 @@ func TestNew_EmptyPasswordError(t *testing.T) {
 	}
 }
 
-func TestClose_SavesState(t *testing.T) {
+func TestClose_SavesWalletState(t *testing.T) {
 	eng := initTestEngine(t)
-	eng.State.SetNode("testpub", &NodeState{PubKeyHex: "testpub", Path: "/test"})
 
 	if err := eng.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Verify state was persisted.
+	// Verify wallet state was persisted.
+	statePath := filepath.Join(eng.DataDir, "state.json")
+	_, err := os.Stat(statePath)
+	require.NoError(t, err, "wallet state.json should exist after Close")
+}
+
+func TestClose_DoesNotOverwriteNodeState(t *testing.T) {
+	eng := initTestEngine(t)
+
+	// Simulate a concurrent process saving node state.
+	eng.State.SetNode("testpub", &NodeState{PubKeyHex: "testpub", Path: "/test"})
+	require.NoError(t, eng.State.Save())
+
+	// Now simulate stale in-memory state (like a daemon that started before the write).
+	eng.State.SetNode("testpub", &NodeState{PubKeyHex: "testpub", Path: "/stale"})
+
+	// Close should NOT overwrite the file with the stale in-memory state.
+	require.NoError(t, eng.Close())
+
 	loaded, err := LoadLocalState(filepath.Join(eng.DataDir, "nodes.json"))
-	if err != nil {
-		t.Fatalf("LoadLocalState: %v", err)
-	}
-	if loaded.GetNode("testpub") == nil {
-		t.Error("state not persisted after Close")
-	}
+	require.NoError(t, err)
+	node := loaded.GetNode("testpub")
+	require.NotNil(t, node)
+	assert.Equal(t, "/test", node.Path, "Close should not overwrite node state saved by withWriteLock")
 }
 
 // --- ResolveVaultIndex tests ---

@@ -137,15 +137,14 @@ func (v *Vault) withWriteLock(fn func() error) error {
 	return v.State.Save()
 }
 
-// Close persists state and releases resources. Should be called when done.
+// Close releases resources. Vault node state is already persisted by each
+// write operation via withWriteLock; Close only saves wallet state (fee
+// derivation indexes) to avoid overwriting concurrent node state updates.
 func (v *Vault) Close() error {
 	if v.SPVStore != nil {
 		_ = v.SPVStore.Close()
 	}
-	if err := v.saveWalletState(); err != nil {
-		return fmt.Errorf("vault: save wallet state on close: %w", err)
-	}
-	return v.State.Save()
+	return v.saveWalletState()
 }
 
 // InitSPV initializes the SPV client and persistent header/tx store.
