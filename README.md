@@ -18,6 +18,7 @@ Module: `github.com/bitfsorg/libbitfs-go`
 | network | Blockchain service interface (BlockchainService, RPCClient, SPVClient, presets) |
 | payment | HTTP 402 payment protocol (X-Price/X-Invoice-Id headers, HTLC, payment verification) |
 | paymail | Paymail protocol (.well-known/bsvalias discovery, PKI endpoint resolution) |
+| engine | Wallet-state mutation operations with process-level file locking |
 | revshare | Revenue sharing (registry, distribution algorithm, share conservation) |
 | config | Configuration file parser (key=value format) |
 
