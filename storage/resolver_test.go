@@ -16,8 +16,9 @@ func testKeyHash(data []byte) []byte {
 	return h[:]
 }
 
-// contentKeyHash returns the SHA256 hash of content, suitable as keyHash
-// for content-addressed storage where keyHash = SHA256(stored_data).
+// contentKeyHash returns a valid 32-byte hash derived from content.
+// Used in tests as a convenient keyHash generator; in production,
+// keyHash = SHA256(SHA256(plaintext)).
 func contentKeyHash(content []byte) []byte {
 	h := sha256.Sum256(content)
 	return h[:]
@@ -201,10 +202,12 @@ func TestContentResolver_FetchEndpointFallback(t *testing.T) {
 	assert.Equal(t, ciphertext, data)
 }
 
-func TestContentResolver_FetchHashMismatch(t *testing.T) {
-	// Endpoint returns data that doesn't match the requested keyHash.
-	ciphertext := []byte("tampered-data")
-	wrongKeyHash := testKeyHash([]byte("expected-different-content"))
+func TestContentResolver_FetchAcceptsRemoteData(t *testing.T) {
+	// The resolver no longer verifies SHA256(data) == keyHash because
+	// keyHash is SHA256(SHA256(plaintext)) while the wire data is ciphertext.
+	// Integrity is verified at the decryption layer (AES-256-GCM).
+	ciphertext := []byte("any-remote-data")
+	keyHash := testKeyHash([]byte("unrelated-key-material"))
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -217,31 +220,98 @@ func TestContentResolver_FetchHashMismatch(t *testing.T) {
 		Client:    srv.Client(),
 	}
 
-	_, err := r.Fetch(wrongKeyHash)
-	assert.ErrorIs(t, err, ErrNotFound, "should reject data with hash mismatch")
+	data, err := r.Fetch(keyHash)
+	require.NoError(t, err, "resolver should accept remote data without hash verification")
+	assert.Equal(t, ciphertext, data)
 }
 
-func TestContentResolver_FetchHashMismatchFallback(t *testing.T) {
-	// First endpoint returns tampered data, second returns correct data.
-	goodData := []byte("correct-content")
-	keyHash := contentKeyHash(goodData)
+func TestContentResolver_FetchEncryptedContent(t *testing.T) {
+	// Simulate real-world scenario: keyHash = SHA256(SHA256(plaintext)),
+	// but the remote endpoint serves ciphertext (encrypted version of plaintext).
+	// These are completely different bytes, so SHA256(ciphertext) != keyHash.
+	plaintext := []byte("hello world")
+	ciphertext := []byte("encrypted-hello-world-aes256gcm") // opaque ciphertext
 
-	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("tampered-content"))
-	}))
-	defer badSrv.Close()
+	// Real keyHash derivation: double-SHA256 of plaintext.
+	inner := sha256.Sum256(plaintext)
+	keyHash := sha256.Sum256(inner[:])
 
-	goodSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(goodData)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(ciphertext)
 	}))
-	defer goodSrv.Close()
+	defer srv.Close()
 
 	r := &ContentResolver{
-		Endpoints: []string{badSrv.URL, goodSrv.URL},
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	// Before the fix, this would return ErrNotFound because
+	// SHA256(ciphertext) != SHA256(SHA256(plaintext)).
+	data, err := r.Fetch(keyHash[:])
+	require.NoError(t, err, "Fetch must succeed for encrypted content keyed by SHA256(SHA256(plaintext))")
+	assert.Equal(t, ciphertext, data)
+}
+
+func TestContentResolver_FetchEncryptedContentCachesLocally(t *testing.T) {
+	// Verify that remotely fetched encrypted content is cached in local store.
+	plaintext := []byte("cache-test-data")
+	ciphertext := []byte("encrypted-cache-test-data-bytes")
+
+	inner := sha256.Sum256(plaintext)
+	keyHash := sha256.Sum256(inner[:])
+
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(ciphertext)
+	}))
+	defer srv.Close()
+
+	r := &ContentResolver{
+		Store:     store,
+		Endpoints: []string{srv.URL},
+		Client:    srv.Client(),
+	}
+
+	data, err := r.Fetch(keyHash[:])
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, data)
+
+	// Verify cached in local store.
+	cached, err := store.Get(keyHash[:])
+	require.NoError(t, err)
+	assert.Equal(t, ciphertext, cached)
+}
+
+func TestContentResolver_FetchUsesFirstSuccessfulEndpoint(t *testing.T) {
+	// Resolver takes the first endpoint that returns HTTP 200 with data.
+	// Hash verification is not performed at this layer.
+	firstData := []byte("first-endpoint-data")
+	keyHash := testKeyHash([]byte("some-key"))
+
+	firstSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(firstData)
+	}))
+	defer firstSrv.Close()
+
+	secondCalled := false
+	secondSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalled = true
+		_, _ = w.Write([]byte("second-endpoint-data"))
+	}))
+	defer secondSrv.Close()
+
+	r := &ContentResolver{
+		Endpoints: []string{firstSrv.URL, secondSrv.URL},
 		Client:    &http.Client{},
 	}
 
 	data, err := r.Fetch(keyHash)
 	require.NoError(t, err)
-	assert.Equal(t, goodData, data)
+	assert.Equal(t, firstData, data)
+	assert.False(t, secondCalled, "should not contact second endpoint when first succeeds")
 }
