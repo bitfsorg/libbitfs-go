@@ -209,9 +209,11 @@ func (v *Vault) VerifyTx(ctx context.Context, txid string) (*network.VerifyResul
 	call := callI.(*verifyCall)
 	call.once.Do(func() {
 		call.result, call.err = v.verifyTxNetwork(ctx, txid)
-		// Remove from map so future calls retry (e.g., after transient error).
-		v.verifyOnce.Delete(txid)
 	})
+	// Remove from map so future calls retry (e.g., after transient error).
+	// Must be outside once.Do to prevent a race where a concurrent caller
+	// creates a new entry after Delete but before Do returns. [Audit fix M-9]
+	v.verifyOnce.Delete(txid)
 
 	return call.result, call.err
 }

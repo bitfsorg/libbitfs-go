@@ -38,13 +38,21 @@ func loadWalletState(path string) (*wallet.WalletState, error) {
 }
 
 // saveWalletState persists wallet state (indices, vaults) to disk.
+// Uses atomic tmp+rename to prevent corruption on crash. [Audit fix M]
 func (v *Vault) saveWalletState() error {
 	statePath := filepath.Join(v.DataDir, "state.json")
 	data, err := json.MarshalIndent(v.WState, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal wallet state: %w", err)
 	}
-	return os.WriteFile(statePath, data, 0600)
+	tmpPath := statePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("write tmp state: %w", err)
+	}
+	if err := os.Rename(tmpPath, statePath); err != nil {
+		return fmt.Errorf("rename state: %w", err)
+	}
+	return nil
 }
 
 // pubKeyHash computes HASH160(pubkey) = RIPEMD160(SHA256(pubkey)).

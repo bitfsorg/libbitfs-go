@@ -112,8 +112,13 @@ func (e *Engine) saveWalletState(state *wallet.WalletState) error {
 		return fmt.Errorf("engine: marshal wallet state: %w", err)
 	}
 	statePath := filepath.Join(e.dataDir, "state.json")
-	if err := os.WriteFile(statePath, data, 0600); err != nil {
-		return fmt.Errorf("engine: write wallet state: %w", err)
+	// Atomic write via tmp+rename to prevent corruption on crash. [Audit fix M]
+	tmpPath := statePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("engine: write tmp state: %w", err)
+	}
+	if err := os.Rename(tmpPath, statePath); err != nil {
+		return fmt.Errorf("engine: rename state: %w", err)
 	}
 	return nil
 }
