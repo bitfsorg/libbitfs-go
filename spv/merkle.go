@@ -22,6 +22,14 @@ func DoubleHash(data []byte) []byte {
 //	for i, node in proofNodes:
 //	    if bit i of index is 0:  hash = DoubleHash(hash || node)
 //	    else:                     hash = DoubleHash(node || hash)
+//
+// Defense (CVE-2012-2459 style): a proof node equal to the running hash is
+// rejected (returns nil) when the index bit places the running hash on the
+// RIGHT. Bitcoin pads odd-width rows by duplicating the last hash, so a
+// legitimate self-pairing always has the real element on the LEFT (index bit
+// 0). A proof claiming the phantom right-hand duplicate position would let
+// the same transaction be "proven" at two different indices — the duplicate
+// hash mutation underlying CVE-2012-2459.
 func ComputeMerkleRoot(txHash []byte, index uint32, proofNodes [][]byte) []byte {
 	if len(txHash) != 32 {
 		return nil
@@ -32,6 +40,10 @@ func ComputeMerkleRoot(txHash []byte, index uint32, proofNodes [][]byte) []byte 
 
 	for i, node := range proofNodes {
 		if len(node) != 32 {
+			return nil
+		}
+		// Reject the phantom right-of-duplicate position (CVE-2012-2459).
+		if (index>>uint(i))&1 == 1 && bytes.Equal(node, hash) {
 			return nil
 		}
 		combined := make([]byte, 64)

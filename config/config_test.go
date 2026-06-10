@@ -28,7 +28,7 @@ func TestDefaultConfig(t *testing.T) {
 		got  interface{}
 		want interface{}
 	}{
-		{"ListenAddr", cfg.ListenAddr, ":8080"},
+		{"ListenAddr", cfg.ListenAddr, "127.0.0.1:8080"},
 		{"Network", cfg.Network, "mainnet"},
 		{"LogLevel", cfg.LogLevel, "info"},
 		{"LogFile", cfg.LogFile, ""},
@@ -161,8 +161,8 @@ loglevel = debug
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "debug")
 	}
 	// Unset fields should retain defaults.
-	if cfg.ListenAddr != ":8080" {
-		t.Errorf("ListenAddr = %q, want default %q", cfg.ListenAddr, ":8080")
+	if cfg.ListenAddr != "127.0.0.1:8080" {
+		t.Errorf("ListenAddr = %q, want default %q", cfg.ListenAddr, "127.0.0.1:8080")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestDefaultDataDirForNetwork(t *testing.T) {
 	}{
 		{network: "mainnet", suffix: ".bitfs"},
 		{network: "testnet", suffix: ".bitfs-testnet"},
-		{network: "regtest", suffix: ".regtest"},
+		{network: "regtest", suffix: ".bitfs-regtest"},
 		{network: "", suffix: ".bitfs"},
 		{network: "unknown", suffix: ".bitfs"},
 	}

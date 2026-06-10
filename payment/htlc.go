@@ -15,7 +15,7 @@ type HTLCParams struct {
 	BuyerPubKey  []byte // Buyer's compressed public key (33 bytes)
 	SellerPubKey []byte // Seller's compressed public key (33 bytes) — kept for BuildHTLCFundingTx compatibility; not embedded in the HTLC script
 	SellerAddr   []byte // Seller's P2PKH address hash (20 bytes)
-	CapsuleHash  []byte // SHA256(capsule), 32 bytes
+	CapsuleHash  []byte // SHA256(fileTxID || capsule), 32 bytes
 	Amount       uint64 // Payment amount in satoshis
 	Timeout      uint32 // Refund timeout in blocks (default 72 = ~12h), used as nLockTime. Must be in [MinHTLCTimeout, MaxHTLCTimeout].
 	InvoiceID    []byte // 16-byte invoice ID for replay protection (mandatory)
@@ -67,7 +67,7 @@ const (
 // Constructor parameters embedded in the script:
 //
 //   - invoiceId   — 16-byte replay protection token (mandatory)
-//   - capsuleHash — SHA256(capsule), 32 bytes
+//   - capsuleHash — SHA256(fileTxID || capsule), 32 bytes
 //   - sellerPkh   — HASH160(seller public key), 20 bytes
 //   - buyerPkh    — HASH160(buyer public key), 20 bytes
 //
@@ -214,8 +214,10 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 
 		// The preimage (fileTxID || capsule) is the third element (chunks[2]).
 		// It must be exactly 64 bytes: 32-byte fileTxID + 32-byte capsule.
+		// Any other length is rejected outright — trailing garbage would not
+		// hash to the embedded capsuleHash and must not be silently truncated.
 		preimageChunk := chunks[2]
-		if len(preimageChunk.Data) < 64 {
+		if len(preimageChunk.Data) != 64 {
 			continue
 		}
 
@@ -232,7 +234,7 @@ func ParseHTLCPreimage(spendingTx []byte, expectedCapsuleHash []byte, fileTxID .
 		// Verify hash if expected hash provided.
 		// SHA256(fileTxID || capsule) must match the embedded capsuleHash.
 		if expectedCapsuleHash != nil {
-			h := sha256.Sum256(preimageChunk.Data[:64])
+			h := sha256.Sum256(preimageChunk.Data)
 			if !bytes.Equal(h[:], expectedCapsuleHash) {
 				continue
 			}

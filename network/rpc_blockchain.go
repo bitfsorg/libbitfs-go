@@ -41,7 +41,7 @@ func parseCMerkleBlock(txid string, data []byte) (*MerkleProof, error) {
 	// Convert display txid (big-endian) to internal byte order for tree matching.
 	targetTxID := reverseBytesCopy(txidBytes)
 
-	headerBytes, txIndex, branches, _, err := ParseBIP37MerkleBlock(data, targetTxID)
+	headerBytes, txIndex, branches, totalTxs, err := ParseBIP37MerkleBlock(data, targetTxID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidResponse, err)
 	}
@@ -55,6 +55,7 @@ func parseCMerkleBlock(txid string, data []byte) (*MerkleProof, error) {
 		BlockHash: blockHashHex,
 		Branches:  branches,
 		Index:     int(txIndex),
+		TotalTxs:  totalTxs,
 	}, nil
 }
 

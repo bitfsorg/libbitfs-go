@@ -25,4 +25,9 @@ var (
 
 	// ErrHKDFFailure indicates HKDF key derivation failed.
 	ErrHKDFFailure = errors.New("method42: HKDF key derivation failed")
+
+	// ErrPointAtInfinity indicates the ECDH shared point is the point at
+	// infinity (identity element), which yields no usable shared secret.
+	// Mirrors the TS-side Method42Error('ECDH produced point at infinity').
+	ErrPointAtInfinity = errors.New("method42: ECDH produced point at infinity")
 )

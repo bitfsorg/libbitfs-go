@@ -55,7 +55,7 @@ func DefaultDataDir() string {
 // given network.
 //   - mainnet -> ~/.bitfs
 //   - testnet -> ~/.bitfs-testnet
-//   - regtest -> ~/.regtest
+//   - regtest -> ~/.bitfs-regtest
 func DefaultDataDirForNetwork(network string) string {
 	network = strings.ToLower(strings.TrimSpace(network))
 	dirName := ".bitfs"
@@ -63,7 +63,7 @@ func DefaultDataDirForNetwork(network string) string {
 	case "testnet":
 		dirName = ".bitfs-testnet"
 	case "regtest":
-		dirName = ".regtest"
+		dirName = ".bitfs-regtest"
 	}
 
 	home, err := os.UserHomeDir()
@@ -76,8 +76,10 @@ func DefaultDataDirForNetwork(network string) string {
 // DefaultConfig returns a Config populated with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		DataDir:    DefaultDataDir(),
-		ListenAddr: ":8080",
+		DataDir: DefaultDataDir(),
+		// Bind to loopback by default (ConceptDesign #21): the daemon serves
+		// localhost only unless the operator explicitly opts into exposure.
+		ListenAddr: "127.0.0.1:8080",
 		Network:    "mainnet",
 		LogLevel:   "info",
 		LogFile:    "",

@@ -303,6 +303,60 @@ func TestComputeMerkleRoot_TwoLevels(t *testing.T) {
 	assert.Equal(t, expectedRoot, computedRoot)
 }
 
+func TestComputeMerkleRoot_RejectsPhantomDuplicateIndex(t *testing.T) {
+	// CVE-2012-2459: a 3-tx block pads the last row to [tx0, tx1, tx2, tx2].
+	// tx2 is legitimately provable at index 2 (left of its self-pair). A proof
+	// claiming the phantom duplicate position at index 3 (tx2 as the RIGHT
+	// element, with itself as the left sibling) must be rejected — otherwise
+	// the same tx is "proven" at two different indices under the same root.
+	tx0 := makeTxHash(0x20)
+	tx1 := makeTxHash(0x21)
+	tx2 := makeTxHash(0x22)
+
+	root := ComputeMerkleRootFromTxList([][]byte{tx0, tx1, tx2})
+	require.NotNil(t, root)
+
+	pair01 := make([]byte, 64)
+	copy(pair01[:32], tx0)
+	copy(pair01[32:], tx1)
+	h01 := DoubleHash(pair01)
+
+	// Legitimate proof for tx2 at index 2: first node is tx2 itself (odd-row
+	// padding, running hash on the LEFT) — must still verify.
+	legitRoot := ComputeMerkleRoot(tx2, 2, [][]byte{tx2, h01})
+	assert.Equal(t, root, legitRoot, "legitimate odd-row self-pair proof must verify")
+
+	// Phantom proof for tx2 at index 3 (running hash on the RIGHT, left
+	// sibling equal to itself) — must be rejected.
+	phantomRoot := ComputeMerkleRoot(tx2, 3, [][]byte{tx2, h01})
+	assert.Nil(t, phantomRoot, "phantom duplicate-index proof must be rejected")
+}
+
+func TestVerifyMerkleProof_RejectsPhantomDuplicateIndex(t *testing.T) {
+	tx0 := makeTxHash(0x30)
+	tx1 := makeTxHash(0x31)
+	tx2 := makeTxHash(0x32)
+	root := ComputeMerkleRootFromTxList([][]byte{tx0, tx1, tx2})
+	require.NotNil(t, root)
+
+	pair01 := make([]byte, 64)
+	copy(pair01[:32], tx0)
+	copy(pair01[32:], tx1)
+	h01 := DoubleHash(pair01)
+
+	// Legitimate proof at index 2 verifies.
+	okProof := &MerkleProof{TxID: tx2, Index: 2, Nodes: [][]byte{tx2, h01}}
+	ok, err := VerifyMerkleProof(okProof, root)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	// Phantom proof at index 3 is rejected with an error.
+	badProof := &MerkleProof{TxID: tx2, Index: 3, Nodes: [][]byte{tx2, h01}}
+	ok, err = VerifyMerkleProof(badProof, root)
+	assert.Error(t, err)
+	assert.False(t, ok)
+}
+
 func TestComputeMerkleRoot_InvalidTxHash(t *testing.T) {
 	result := ComputeMerkleRoot([]byte{0x01}, 0, [][]byte{makeHash(0xAA)})
 	assert.Nil(t, result, "should return nil for invalid txHash length")

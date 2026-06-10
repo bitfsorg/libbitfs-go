@@ -127,6 +127,43 @@ func TestParseHTLCPreimage_EmptyPreimageData(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidPreimage)
 }
 
+func TestParseHTLCPreimage_OversizePreimageRejected(t *testing.T) {
+	// A preimage chunk longer than 64 bytes must be rejected outright,
+	// not truncated to its first 64 bytes.
+	tx := transaction.NewTransaction()
+	dummyTxID := chainhash.DoubleHashH([]byte("oversize-preimage"))
+	s := &script.Script{}
+	s.AppendPushData([]byte("sig"))
+	s.AppendPushData([]byte("pubkey"))
+	s.AppendPushData(bytes.Repeat([]byte{0xab}, 65)) // 65 bytes: invalid
+	s.AppendOpcodes(script.OpTRUE)
+	tx.AddInput(&transaction.TransactionInput{
+		SourceTXID:       &dummyTxID,
+		SourceTxOutIndex: 0,
+		UnlockingScript:  s,
+	})
+	_, err := ParseHTLCPreimage(tx.Bytes(), nil)
+	assert.ErrorIs(t, err, ErrInvalidPreimage)
+}
+
+func TestParseHTLCPreimage_UndersizePreimageRejected(t *testing.T) {
+	// A preimage chunk shorter than 64 bytes must be rejected.
+	tx := transaction.NewTransaction()
+	dummyTxID := chainhash.DoubleHashH([]byte("undersize-preimage"))
+	s := &script.Script{}
+	s.AppendPushData([]byte("sig"))
+	s.AppendPushData([]byte("pubkey"))
+	s.AppendPushData(bytes.Repeat([]byte{0xcd}, 63)) // 63 bytes: invalid
+	s.AppendOpcodes(script.OpTRUE)
+	tx.AddInput(&transaction.TransactionInput{
+		SourceTXID:       &dummyTxID,
+		SourceTxOutIndex: 0,
+		UnlockingScript:  s,
+	})
+	_, err := ParseHTLCPreimage(tx.Bytes(), nil)
+	assert.ErrorIs(t, err, ErrInvalidPreimage)
+}
+
 func TestParseHTLCPreimage_MultipleInputsSecondMatches(t *testing.T) {
 	tx := transaction.NewTransaction()
 

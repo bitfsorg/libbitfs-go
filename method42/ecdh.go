@@ -31,14 +31,37 @@ func ECDH(privateKey *ec.PrivateKey, publicKey *ec.PublicKey) ([]byte, error) {
 		return nil, fmt.Errorf("method42: ECDH failed: %w", err)
 	}
 
+	// Defense in depth: reject the point at infinity (identity element).
+	// A degenerate scalar (D ≡ 0 mod N) would produce it; the resulting
+	// "shared secret" would be a predictable all-zero value.
+	if sharedPoint == nil || sharedPoint.X == nil {
+		return nil, ErrPointAtInfinity
+	}
+
 	// Serialize x-coordinate as 32 bytes (zero-padded big-endian)
 	xBytes := sharedPoint.X.Bytes()
+	out := make([]byte, 32)
 	if len(xBytes) < 32 {
-		padded := make([]byte, 32)
-		copy(padded[32-len(xBytes):], xBytes)
-		return padded, nil
+		copy(out[32-len(xBytes):], xBytes)
+	} else {
+		copy(out, xBytes[:32])
 	}
-	return xBytes[:32], nil
+
+	// An all-zero x-coordinate indicates the point at infinity (the go-sdk
+	// represents it as (0, 0) after scalar multiplication).
+	if isAllZero(out) {
+		return nil, ErrPointAtInfinity
+	}
+	return out, nil
+}
+
+// isAllZero reports whether every byte in b is zero.
+func isAllZero(b []byte) bool {
+	var acc byte
+	for _, v := range b {
+		acc |= v
+	}
+	return acc == 0
 }
 
 // FreePrivateKey returns a private key with scalar value 1.

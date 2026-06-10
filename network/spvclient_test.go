@@ -289,6 +289,79 @@ func TestSPVClientVerifyTx_MultiBranch(t *testing.T) {
 	assert.Equal(t, uint64(1), result.BlockHeight)
 }
 
+func TestSPVClientVerifyTx_ShapeValidation(t *testing.T) {
+	// Two-tx block: tree depth is 1, so a proof must have exactly 1 branch
+	// when TotalTxs is known.
+	tx0 := spv.DoubleHash([]byte("coinbase"))
+	tx1 := spv.DoubleHash([]byte("our-tx"))
+
+	combined := make([]byte, 64)
+	copy(combined[:32], tx0)
+	copy(combined[32:], tx1)
+	merkleRoot := spv.DoubleHash(combined)
+
+	header := &spv.BlockHeader{
+		Version: 1, PrevBlock: make([]byte, 32), MerkleRoot: merkleRoot,
+		Timestamp: 1700000000, Bits: 0x207fffff, Height: 1,
+	}
+	header.Hash = spv.ComputeHeaderHash(header)
+
+	store := spv.NewMemHeaderStore()
+	require.NoError(t, store.PutHeader(header))
+
+	blockHash := hex.EncodeToString(reverseBytesCopy(header.Hash))
+	txidHex := hex.EncodeToString(reverseBytesCopy(tx1))
+
+	makeClient := func(proof *MerkleProof) *SPVClient {
+		mock := &MockBlockchainService{
+			GetTxStatusFn: func(ctx context.Context, txid string) (*TxStatus, error) {
+				return &TxStatus{Confirmed: true, BlockHash: blockHash, BlockHeight: 1}, nil
+			},
+			GetMerkleProofFn: func(ctx context.Context, txid string) (*MerkleProof, error) {
+				return proof, nil
+			},
+		}
+		return NewSPVClient(mock, store)
+	}
+
+	// Correct shape: 1 branch for 2 txs — verifies.
+	okClient := makeClient(&MerkleProof{
+		TxID: txidHex, Branches: [][]byte{tx0}, Index: 1, TotalTxs: 2,
+	})
+	result, err := okClient.VerifyTx(context.Background(), txidHex)
+	require.NoError(t, err)
+	assert.True(t, result.Confirmed)
+
+	// Wrong shape: 2 branches claimed for a 2-tx block — rejected before
+	// any hash computation.
+	badClient := makeClient(&MerkleProof{
+		TxID: txidHex, Branches: [][]byte{tx0, tx0}, Index: 1, TotalTxs: 2,
+	})
+	_, err = badClient.VerifyTx(context.Background(), txidHex)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shape invalid")
+
+	// Wrong shape: 0 branches for a 2-tx block — rejected.
+	emptyClient := makeClient(&MerkleProof{
+		TxID: txidHex, Branches: [][]byte{}, Index: 0, TotalTxs: 2,
+	})
+	_, err = emptyClient.VerifyTx(context.Background(), txidHex)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shape invalid")
+}
+
+func TestMerkleTreeDepth(t *testing.T) {
+	cases := []struct {
+		n     uint32
+		depth int
+	}{
+		{1, 0}, {2, 1}, {3, 2}, {4, 2}, {5, 3}, {7, 3}, {8, 3}, {9, 4}, {1000, 10},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.depth, merkleTreeDepth(c.n), "n=%d", c.n)
+	}
+}
+
 func TestSPVClientVerifyTx_HeaderNotInStore_FetchAndStore(t *testing.T) {
 	// Header NOT in store; client fetches, deserializes, and stores it.
 	txHash := spv.DoubleHash([]byte("test-tx"))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"io"
+	"math/big"
 	"testing"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -96,6 +97,28 @@ func TestECDH_Deterministic(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, shared1, shared2, "same keys should produce same shared secret")
+}
+
+func TestECDH_PointAtInfinity(t *testing.T) {
+	// A scalar ≡ 0 (mod N) maps any point to the point at infinity.
+	// Construct such a degenerate private key directly (D = curve order N);
+	// it cannot be produced via NewPrivateKey, but a corrupted or maliciously
+	// crafted key must not yield an all-zero "shared secret".
+	privKey, pubKey := generateKeyPair(t)
+	privKey.D = new(big.Int).Set(ec.S256().N)
+
+	shared, err := ECDH(privKey, pubKey)
+	assert.ErrorIs(t, err, ErrPointAtInfinity)
+	assert.Nil(t, shared)
+}
+
+func TestECDH_ValidPathUnaffectedByInfinityCheck(t *testing.T) {
+	// Sanity: normal keys still produce a 32-byte non-zero shared secret.
+	privKey, pubKey := generateKeyPair(t)
+	shared, err := ECDH(privKey, pubKey)
+	require.NoError(t, err)
+	require.Len(t, shared, 32)
+	assert.NotEqual(t, make([]byte, 32), shared, "shared secret must not be all zeros")
 }
 
 func TestECDH_NilPrivateKey(t *testing.T) {

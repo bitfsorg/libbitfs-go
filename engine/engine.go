@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/bitfsorg/libbitfs-go/config"
 	"github.com/bitfsorg/libbitfs-go/wallet"
@@ -47,20 +46,17 @@ func (e *Engine) withState(exclusive bool, fn func(w *wallet.Wallet, state *wall
 
 func (e *Engine) withLock(exclusive bool, fn func() error) error {
 	lockPath := filepath.Join(e.dataDir, "vault.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("engine: open lock file: %w", err)
 	}
-	defer func() { _ = lockFile.Close() }()
+	defer func() { _ = f.Close() }()
 
-	lockMode := syscall.LOCK_SH
-	if exclusive {
-		lockMode = syscall.LOCK_EX
-	}
-	if err := syscall.Flock(int(lockFile.Fd()), lockMode); err != nil {
+	// Platform-specific locking lives in flock_unix.go / flock_windows.go.
+	if err := lockFile(f, exclusive); err != nil {
 		return fmt.Errorf("engine: lock file: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = unlockFile(f) }()
 
 	return fn()
 }

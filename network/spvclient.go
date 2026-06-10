@@ -110,6 +110,15 @@ func (s *SPVClient) VerifyTx(ctx context.Context, txid string) (*VerifyResult, e
 	// Convert display txid (big-endian) to internal byte order for Merkle verification.
 	txidInternal := reverseBytesCopy(txidDisplayBytes)
 
+	// Shape validation: when the block's transaction count is known, the
+	// branch count must equal the Merkle tree depth (CVE-2012-2459 defense).
+	if proof.TotalTxs > 0 {
+		if len(proof.Branches) != merkleTreeDepth(proof.TotalTxs) {
+			return nil, fmt.Errorf("network: merkle proof shape invalid for tx %s: %d branches, expected %d for %d txs",
+				txid, len(proof.Branches), merkleTreeDepth(proof.TotalTxs), proof.TotalTxs)
+		}
+	}
+
 	// Single-tx block: txHash IS the Merkle root, no branches needed.
 	if len(proof.Branches) == 0 && proof.Index == 0 {
 		if !bytes.Equal(txidInternal, header.MerkleRoot) {
@@ -205,4 +214,15 @@ func (s *SPVClient) SyncHeaders(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// merkleTreeDepth returns the depth (number of branch levels above the
+// leaves) of a Bitcoin Merkle tree with n transactions. Odd-width rows are
+// padded by duplicating the last hash, so each level halves rounding up.
+func merkleTreeDepth(n uint32) int {
+	depth := 0
+	for w := n; w > 1; w = (w + 1) / 2 {
+		depth++
+	}
+	return depth
 }

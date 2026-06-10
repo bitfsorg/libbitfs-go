@@ -67,4 +67,8 @@ type MerkleProof struct {
 	BlockHash string   `json:"block_hash"`
 	Branches  [][]byte `json:"branches"`
 	Index     int      `json:"index"`
+	// TotalTxs is the total number of transactions in the block, when known
+	// (0 = unknown). Used to validate that the branch count matches the
+	// Merkle tree depth.
+	TotalTxs uint32 `json:"total_txs,omitempty"`
 }
